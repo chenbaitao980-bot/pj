@@ -1,0 +1,320 @@
+/**
+ * dsh-workflow-lite — 步骤库面板。
+ */
+
+.library {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  padding: 10px 8px 6px 14px;
+}
+
+.title {
+  font-size: var(--wl-fs-body);
+  font-weight: 600;
+}
+
+.hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hint[data-flash="true"] {
+  color: var(--wl-accent-text);
+  animation: flash 900ms var(--wl-ease) backwards;
+}
+
+@keyframes flash {
+  0% {
+    opacity: 0.2;
+    transform: translateX(-4px);
+  }
+
+  30% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.scroll {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  padding: 4px 6px 10px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.item {
+  position: relative;
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  text-align: left;
+  cursor: grab;
+  transition:
+    transform 140ms var(--wl-ease),
+    background-color 120ms linear;
+}
+
+.item:hover {
+  background: var(--wl-hover);
+}
+
+.item:active {
+  cursor: grabbing;
+  transform: scale(0.98);
+}
+
+.item:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+.item:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.item[data-nudge="0"] {
+  animation: nudgeA 360ms var(--wl-ease);
+}
+
+.item[data-nudge="1"] {
+  animation: nudgeB 360ms var(--wl-ease);
+}
+
+@keyframes nudgeA {
+  30% {
+    transform: translateX(6px);
+  }
+
+  60% {
+    transform: translateX(-2px);
+  }
+}
+
+@keyframes nudgeB {
+  30% {
+    transform: translateX(6px);
+  }
+
+  60% {
+    transform: translateX(-2px);
+  }
+}
+
+.itemText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.itemTitle,
+.itemDesc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemTitle {
+  font-weight: 500;
+}
+
+.itemDesc {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.grip {
+  flex: none;
+  color: var(--wl-text-3);
+  font-size: 10px;
+  letter-spacing: -2px;
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+
+.item:hover .grip {
+  opacity: 0.8;
+}
+
+.emptyNote {
+  margin: 2px 8px;
+  padding: 10px;
+  border: 1px dashed var(--wl-line-strong);
+  border-radius: calc(10px * var(--wl-round, 1));
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .item,
+  .grip {
+    transition: none;
+  }
+
+  .item[data-nudge],
+  .hint[data-flash="true"] {
+    animation: none;
+  }
+}
+
+/* ── 分节（可收起）─────────────────────────────────────────── */
+
+.sectionHead {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin: 8px 0 2px;
+  padding-right: 2px;
+}
+
+.sectionToggle {
+  display: inline-flex;
+  flex: 1 1 auto;
+  gap: 4px;
+  align-items: center;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-3);
+  font: inherit;
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.sectionToggle:hover {
+  background: var(--wl-hover);
+  color: var(--wl-text-2);
+}
+
+.sectionToggle:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+.sectionToggle svg {
+  transition: transform 180ms var(--wl-ease);
+}
+
+.sectionToggle[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 第一节紧贴面板标题：分节之间的 8px 间距只留给它们之间。 */
+.sectionHead:first-child {
+  margin-top: 2px;
+}
+
+/* 标题右边的数量：收起后也看得出这一节里有几项。 */
+.sectionCount {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: calc(9px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* 标题的颜色是 FadeText 的两层交叉淡：没选中常规、选中蓝；底色是 ui.fillOn 的渐显。 */
+.item {
+  --wl-off: var(--wl-text);
+  --wl-on: var(--wl-accent-text);
+}
+
+.item[data-broken="true"] {
+  cursor: pointer;
+}
+
+.item[data-broken="true"] .itemDesc {
+  color: var(--wl-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sectionToggle svg {
+    transition: none;
+  }
+
+  .group {
+    animation: none;
+  }
+}
+
+/* 步骤库里的「文件」：文件卡的颜色。 */
+/* 输入的图标块：墨色（和交回答的线、画布上的输入卡同色）。 */
+.inputKind {
+  background: var(--wl-ask-soft);
+  color: var(--wl-io-ask);
+}
+
+.fileKind {
+  background: var(--wl-file-soft);
+  color: var(--wl-file);
+}
+
+/* 瑞士：分组小标题改成加粗、加宽字距的大写小字（见 shell.module.css 的 data-look）。 */
+:global([data-look="swiss"]) .sectionToggle {
+  color: var(--wl-text);
+  font-size: var(--wl-fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* 瑞士：标题加粗、字距收紧。 */
+:global([data-look="swiss"]) .title {
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+/* 瑞士：数量不要底色，只留数字。 */
+:global([data-look="swiss"]) .sectionCount {
+  padding: 0;
+  background: none;
+}

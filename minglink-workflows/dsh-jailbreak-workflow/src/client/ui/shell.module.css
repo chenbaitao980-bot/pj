@@ -1,0 +1,1137 @@
+/**
+ * dsh-workflow-lite — 视图外壳：设计令牌 + 整体版式。
+ *
+ * 版式是**画布优先**：画布铺满整个视图，其余一切（顶栏、步骤库、属性面板、缩放）都是
+ * 浮在画布上的圆角面板。没选中东西时右边什么都没有——界面上只留当下用得着的。
+ *
+ * 配色自带，亮色、暗色各四套主题（model/themes.ts），工作流中心「设置」页里挑；
+ * 用 `light-dark()` 跟随宿主设在 `<html>` 上的 `color-scheme` 在亮、暗两套之间切。
+ * 层级靠"面越高越亮 + 细描边 + 柔和阴影"给出。
+ *
+ * 色彩分工：界面本身是中性的面色 + 一支蓝色强调色（按钮、选中、焦点）；画布上的颜色
+ * 只用来说"线是哪一种"——流程线按条件（总是蓝、通过绿、未通过红、自定义紫），读写线按读写（产出金、更新洋红、读取青）。
+ */
+
+.root {
+  /*
+   * 色值不写在这里：视图根节点按选中的主题内联写出 `--wl-l-*`（亮色档）与 `--wl-d-*`（暗色档）
+   * 两组基础色（model/themes.ts），这里用 `light-dark()` 跟着 `color-scheme` 挑一组。
+   * 淡底（选中、标签、提示的底）按基础色调出来：亮色档淡一些，暗色档浓一些才看得见。
+   */
+
+  /* 面。 */
+  --wl-canvas: light-dark(var(--wl-l-canvas), var(--wl-d-canvas));
+  --wl-dot: light-dark(
+    rgb(var(--wl-l-ink) / var(--wl-l-dot-alpha)),
+    rgb(var(--wl-d-ink) / var(--wl-d-dot-alpha))
+  );
+  --wl-panel: light-dark(var(--wl-l-panel), var(--wl-d-panel));
+  --wl-fill: light-dark(var(--wl-l-fill), var(--wl-d-fill));
+  --wl-fill-strong: light-dark(var(--wl-l-fill-strong), var(--wl-d-fill-strong));
+  --wl-hover: light-dark(
+    rgb(var(--wl-l-ink) / var(--wl-l-hover-alpha)),
+    rgb(var(--wl-d-ink) / var(--wl-d-hover-alpha))
+  );
+  --wl-line: light-dark(
+    rgb(var(--wl-l-ink) / var(--wl-l-line-alpha)),
+    rgb(var(--wl-d-ink) / var(--wl-d-line-alpha))
+  );
+  --wl-line-strong: light-dark(
+    rgb(var(--wl-l-ink) / var(--wl-l-line-strong-alpha)),
+    rgb(var(--wl-d-ink) / var(--wl-d-line-strong-alpha))
+  );
+  --wl-scrim: light-dark(var(--wl-l-scrim), var(--wl-d-scrim));
+
+  /* 文字三级。第三级也要过 AA（4.5:1），它承载说明与计数。 */
+  --wl-text: light-dark(var(--wl-l-text), var(--wl-d-text));
+  --wl-text-2: light-dark(var(--wl-l-text2), var(--wl-d-text2));
+  --wl-text-3: light-dark(var(--wl-l-text3), var(--wl-d-text3));
+
+  /* 强调色：按钮、选中、焦点。每套主题一支，带着那套主题的性格（林间是绿、暖夜是橙，别的是各自的蓝）。 */
+  --wl-accent: light-dark(var(--wl-l-accent), var(--wl-d-accent));
+  --wl-accent-strong: light-dark(var(--wl-l-accent-strong), var(--wl-d-accent-strong));
+  --wl-accent-on: light-dark(var(--wl-l-accent-on), var(--wl-d-accent-on));
+  --wl-accent-text: light-dark(var(--wl-l-accent-text), var(--wl-d-accent-text));
+  --wl-accent-soft: light-dark(
+    color-mix(in srgb, var(--wl-l-accent) 11%, transparent),
+    color-mix(in srgb, var(--wl-d-accent) 17%, transparent)
+  );
+
+  /* 语义色：只在表达状态时用。 */
+  --wl-danger: light-dark(var(--wl-l-danger), var(--wl-d-danger));
+  --wl-danger-soft: light-dark(
+    color-mix(in srgb, var(--wl-l-danger) 10%, transparent),
+    color-mix(in srgb, var(--wl-d-danger) 15%, transparent)
+  );
+  --wl-warn: light-dark(var(--wl-l-warn), var(--wl-d-warn));
+  /*
+   * 实心小圆点 / 进度条用的黄、绿：亮色档的 --wl-warn、--wl-ok 是为文字对比度压深的（黄压成了棕），
+   * 做成实心点发黑发闷。这里把亮度提到 0.74 / 0.68，色相照主题的来、彩度略加；暗色档本来就亮，原样用。
+   */
+  --wl-warn-dot: light-dark(#e09400, var(--wl-d-warn));
+  --wl-ok-dot: light-dark(#27a06a, var(--wl-d-ok));
+  --wl-warn-soft: light-dark(
+    color-mix(in srgb, var(--wl-l-warn) 11%, transparent),
+    color-mix(in srgb, var(--wl-d-warn) 15%, transparent)
+  );
+  --wl-ok: light-dark(var(--wl-l-ok), var(--wl-d-ok));
+  --wl-ok-soft: light-dark(
+    color-mix(in srgb, var(--wl-l-ok) 11%, transparent),
+    color-mix(in srgb, var(--wl-d-ok) 15%, transparent)
+  );
+
+  /*
+   * 线色：七种彩色的线各一色，谁也不和谁重样；第八种交回答（输入 → 步骤）是中性的墨色 `--wl-io-ask`。
+   * - 流程线（步骤 → 步骤）按条件分：总是 = 蓝（主干）、通过 = 绿、未通过 = 红、自定义条件 = 紫。
+   * - 读写线（步骤 ↔ 文件）按读写分：产出 = 金（新的产物）、更新 = 洋红（在原文件上改）、读取 = 青。
+   * 每套主题都按 OKLab 算过两两色差（ΔE ≥ 8，默认两套 ≥ 13），也直接当文字色用，在面板上都过 4.5:1；
+   * 色弱时红绿、蓝紫难分，所以每种线还有第二重记号：条件牌子、读取是虚线、更新两头有箭头。
+   */
+  --wl-flow-always: light-dark(var(--wl-l-always), var(--wl-d-always));
+  --wl-flow-pass: light-dark(var(--wl-l-pass), var(--wl-d-pass));
+  --wl-flow-fail: light-dark(var(--wl-l-fail), var(--wl-d-fail));
+  --wl-flow-custom: light-dark(var(--wl-l-custom), var(--wl-d-custom));
+  --wl-io-produce: light-dark(var(--wl-l-produce), var(--wl-d-produce));
+  --wl-io-update: light-dark(var(--wl-l-update), var(--wl-d-update));
+  --wl-io-read: light-dark(var(--wl-l-read), var(--wl-d-read));
+
+  /*
+   * 资源卡：纸面接近面板色（干净），靠左侧的类型签、折角和平铺的描边和步骤卡分开；
+   * 类型签与折角背面用一档很淡的石板色。它连着的线才有鲜明的颜色。
+   */
+  --wl-file: light-dark(var(--wl-l-file), var(--wl-d-file));
+  --wl-file-soft: light-dark(
+    color-mix(in srgb, var(--wl-l-file) 10%, transparent),
+    color-mix(in srgb, var(--wl-d-file) 13%, transparent)
+  );
+  --wl-file-surface: light-dark(var(--wl-l-file-surface), var(--wl-d-file-surface));
+  --wl-file-border: light-dark(var(--wl-l-file-border), var(--wl-d-file-border));
+  --wl-file-tab: light-dark(var(--wl-l-file-tab), var(--wl-d-file-tab));
+  --wl-file-back: light-dark(var(--wl-l-file-back), var(--wl-d-file-back));
+
+  /* 步骤卡的色板（shared/appearance.ts 的 STEP_COLORS）：图标块用这一个色的深浅两档。 */
+  --wl-c-blue: light-dark(var(--wl-l-c-blue), var(--wl-d-c-blue));
+  --wl-c-green: light-dark(var(--wl-l-c-green), var(--wl-d-c-green));
+  --wl-c-amber: light-dark(var(--wl-l-c-amber), var(--wl-d-c-amber));
+  --wl-c-coral: light-dark(var(--wl-l-c-coral), var(--wl-d-c-coral));
+  --wl-c-teal: light-dark(var(--wl-l-c-teal), var(--wl-d-c-teal));
+  --wl-c-pink: light-dark(var(--wl-l-c-pink), var(--wl-d-c-pink));
+  --wl-c-olive: light-dark(var(--wl-l-c-olive), var(--wl-d-c-olive));
+  --wl-c-violet: light-dark(var(--wl-l-c-violet), var(--wl-d-c-violet));
+  --wl-c-slate: light-dark(var(--wl-l-c-slate), var(--wl-d-c-slate));
+  /* 记忆（步骤卡上的开关、记忆卡的签）：借色板里的琥珀，和七种线色都不撞。 */
+  --wl-memory: var(--wl-c-amber);
+
+  /* 输入节点：用户的话，用一档中性的墨色（和七种线色都不撞，见 lines.ts）。 */
+  --wl-io-ask: light-dark(var(--wl-l-ask), var(--wl-d-ask));
+  --wl-ask-soft: light-dark(
+    color-mix(in srgb, var(--wl-l-ask) 10%, transparent),
+    color-mix(in srgb, var(--wl-d-ask) 12%, transparent)
+  );
+
+  --wl-tip: light-dark(var(--wl-l-tip), var(--wl-d-tip));
+  --wl-tip-on: light-dark(var(--wl-l-tip-on), var(--wl-d-tip-on));
+
+  /* 字号三档 + 标题一档；圆角三档。 */
+  --wl-fs-title: 15px;
+  --wl-fs-body: 13px;
+  --wl-fs-meta: 12px;
+  --wl-fs-micro: 11px;
+  --wl-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wl-round: 1;
+  --wl-r-control: calc(8px * var(--wl-round));
+  --wl-r-card: calc(12px * var(--wl-round));
+  --wl-r-panel: calc(14px * var(--wl-round));
+
+  /* `light-dark()` 只接受颜色，所以阴影的几何写在外面、只有颜色分明暗。 */
+  --wl-shadow-thumb: 0 1px 2px
+    light-dark(rgb(var(--wl-l-shade) / 14%), rgb(var(--wl-d-shade) / 50%));
+  --wl-shadow-1:
+    0 1px 2px light-dark(rgb(var(--wl-l-shade) / 6%), rgb(var(--wl-d-shade) / 30%)),
+    0 6px 20px light-dark(rgb(var(--wl-l-shade) / 8%), rgb(var(--wl-d-shade) / 32%));
+  --wl-shadow-2:
+    0 2px 6px light-dark(rgb(var(--wl-l-shade) / 8%), rgb(var(--wl-d-shade) / 36%)),
+    0 16px 40px light-dark(rgb(var(--wl-l-shade) / 14%), rgb(var(--wl-d-shade) / 50%));
+
+  /* 动效：只动 transform / opacity，缓出。 */
+  --wl-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* 平滑减速（transitions.dev 的开合、换页共用）：起步更快、尾巴更长，大块的开合用它。 */
+  --wl-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /*
+   * 弹簧（阻尼弹簧采样成 linear()，设计化成 1 个单位时长，约 0.4s 内收住）：
+   * soft 过冲约 2%，弹窗、浮层、选中滑块用；bouncy 过冲约 9%，开关的旋钮、完成的小勾这类要「弹一下」的用。
+   * 过冲会被 opacity 截在 1，只在 transform 上看得见。
+   */
+  --wl-spring: linear(
+    0,
+    0.0334,
+    0.1151,
+    0.2232,
+    0.3416,
+    0.4593,
+    0.5693,
+    0.6674,
+    0.7517,
+    0.8218,
+    0.8783,
+    0.9225,
+    0.956,
+    0.9805,
+    0.9975,
+    1.0088,
+    1.0155,
+    1.0189,
+    1.0199,
+    1.0193,
+    1.0178,
+    1.0156,
+    1.0133,
+    1.0109,
+    1.0087,
+    1.0068,
+    1.0051,
+    1.0036,
+    1.0025,
+    1.0016,
+    1.0009,
+    1.0004,
+    1.0001,
+    0.9998,
+    0.9997,
+    0.9996,
+    1
+  );
+  --wl-spring-bouncy: linear(
+    0,
+    0.0344,
+    0.122,
+    0.242,
+    0.3775,
+    0.5151,
+    0.6453,
+    0.7617,
+    0.8607,
+    0.9407,
+    1.0019,
+    1.0456,
+    1.0739,
+    1.0894,
+    1.0947,
+    1.0923,
+    1.0846,
+    1.0735,
+    1.0608,
+    1.0477,
+    1.0352,
+    1.024,
+    1.0144,
+    1.0066,
+    1.0005,
+    0.9962,
+    0.9933,
+    0.9917,
+    0.991,
+    0.9912,
+    0.9919,
+    0.9929,
+    0.9941,
+    0.9953,
+    0.9965,
+    0.9976,
+    1
+  );
+  /* 弹窗收起、按下回弹这类「收」的动作：iOS 的 sheet 曲线，不过冲。 */
+  --wl-ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --wl-gap: 12px;
+  --wl-top: 60px;
+  --wl-library-w: 216px;
+  /* 与 WorkflowView 里的 `inspectorWidth()` 同一个式子。 */
+  --wl-inspector-w: clamp(300px, 30cqw, 360px);
+
+  position: relative;
+  /*
+   * 宿主把视图挂在 `flex: 1 0 auto; min-height: auto` 的容器里：按内容撑高的话，外层的
+   * 会话滚动区会跟着滚。把 flex-basis 压到 0，让"理想高度"是 0，再由 flex-grow 填满。
+   * `height: 100%` 兜底宿主那层不是 flex 容器的情况。
+   */
+  flex: 1 1 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  container-type: inline-size;
+  background: var(--wl-canvas);
+  color: var(--wl-text);
+  font-family: var(--dsw-font-family, inherit);
+  font-size: var(--wl-fs-body);
+  line-height: 1.5;
+  outline: none;
+  -webkit-font-smoothing: antialiased;
+
+  /* 浏览器原生的东西跟着主题的强调色：勾选框、范围条、输入光标，不用系统默认的那种蓝。 */
+  accent-color: var(--wl-accent);
+  caret-color: var(--wl-accent);
+}
+
+@supports (color: oklch(from red l c h)) {
+  .root {
+    --wl-warn-dot: light-dark(oklch(from var(--wl-l-warn) 0.74 calc(c * 1.3) h), var(--wl-d-warn));
+    --wl-ok-dot: light-dark(oklch(from var(--wl-l-ok) 0.68 calc(c * 1.3) h), var(--wl-d-ok));
+  }
+}
+
+/*
+ * 瑞士（国际主义风格）的「形」：亮色档选了瑞士主题时，视图根写 `data-look="swiss"`（见 model/themes.ts 的 themeLook）。
+ * 颜色之外换四样：
+ * - 直角：所有圆角都乘 `--wl-round`，这里归零；圆点、开关、胶囊（50% / 999px）不乘，仍是圆的。
+ * - 无阴影：层级靠面色和一道细线（面板自己的 1px 描边），不再叠第二圈。
+ * - 字体：Helvetica 系（没有就 Arial、Liberation Sans），中文回落到宿主字体；字距略收。
+ * - 小标题：别处的 `[data-look="swiss"]` 规则把分组标题改成加粗、加宽字距的大写小字。
+ */
+.root[data-look="swiss"] {
+  --wl-round: 0;
+  /* 画布上的卡片用深一档的细线，是整张图里最该看清的东西。 */
+  --wl-card-line: var(--wl-line-strong);
+  --wl-circle: 0;
+  --wl-shadow-thumb: 0 0 0 1px var(--wl-line);
+  --wl-shadow-1: none;
+  --wl-shadow-2: none;
+  --wl-swiss-sans:
+    "Helvetica Neue", Helvetica, Arial, "Nimbus Sans", "Liberation Sans",
+    var(--dsw-font-family, sans-serif);
+
+  /* 淡底（选中、标签、提示）只留一层很淡的底，让字色和细线说话，不铺大片粉彩。 */
+  --wl-accent-soft: color-mix(in srgb, var(--wl-l-accent) 7%, transparent);
+  --wl-danger-soft: color-mix(in srgb, var(--wl-l-danger) 6%, transparent);
+  --wl-warn-soft: color-mix(in srgb, var(--wl-l-warn) 7%, transparent);
+  --wl-ok-soft: color-mix(in srgb, var(--wl-l-ok) 7%, transparent);
+  --wl-file-soft: color-mix(in srgb, var(--wl-l-file) 6%, transparent);
+  --wl-ask-soft: color-mix(in srgb, var(--wl-l-ask) 6%, transparent);
+
+  font-family: var(--wl-swiss-sans);
+  letter-spacing: -0.005em;
+}
+
+/* 第一次加载完成之前先藏着（不占掉点击），加载完淡入；只动透明度。 */
+.root {
+  transition: opacity 140ms linear;
+}
+
+.root[data-booting="true"] {
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+/* 选中的文字：系统整块深蓝太扎眼，换成半透明的强调色，字还是原来的颜色。 */
+.root ::selection {
+  background: color-mix(in srgb, var(--wl-accent) 32%, transparent);
+}
+
+.root *,
+.root *::before,
+.root *::after {
+  box-sizing: border-box;
+}
+
+/*
+ * 输入框一变成「不合法」（`aria-invalid="true"`）就左右轻抖两下，红框是现成的样式；
+ * 只在变成不合法的那一下放，一直不合法不会一直抖。
+ */
+.root input[aria-invalid="true"],
+.root textarea[aria-invalid="true"] {
+  animation: invalidShake 300ms var(--wl-ease-out);
+}
+
+@keyframes invalidShake {
+  0%,
+  100% {
+    transform: none;
+  }
+
+  20% {
+    transform: translateX(-6px);
+  }
+
+  45% {
+    transform: translateX(5px);
+  }
+
+  70% {
+    transform: translateX(-3px);
+  }
+
+  88% {
+    transform: translateX(1px);
+  }
+}
+
+/*
+ * 按下回弹（通用）：视图里所有能点的东西按下去都缩一点、松手弹回——不用一处处加。
+ * 用单独的 `scale` 属性，叠在各处已有的 transform 上而不冲掉；权重压到最低（`:where`），
+ * 要缩得更多或更少的（按钮、勾选圈、分段、开关、菜单项）在自己的类里写，压得过它。
+ * 过渡同样是零权重：自己带 `transition` 的元素松手时是直接弹回去，不动画。
+ */
+:where(.root)
+:where(
+  button,
+  [role="button"],
+  [role="checkbox"],
+  [role="radio"],
+  [role="switch"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"],
+  summary,
+  label:has(> input)
+) {
+  transition: scale 160ms var(--wl-ease-sheet);
+}
+
+:where(.root)
+  :where(
+    button,
+    [role="button"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="tab"],
+    [role="menuitem"],
+    [role="option"],
+    summary,
+    label:has(> input:not(:disabled))
+  ):not(:disabled, [aria-disabled="true"]):active {
+  scale: 0.98;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.root) :where(button, [role]) {
+    transition: none;
+  }
+
+  :where(.root) :where(button, [role]):active {
+    scale: none;
+  }
+}
+
+/*
+ * 焦点环（通用）：键盘聚焦时描边从外面 6px 收到位、颜色同时淡入。零权重——自己带 `animation` 的元素
+ * （列表里依次浮出的行等）不受影响，免得失焦时它们的入场动画被重放。只在聚焦时放，失焦时直接收掉。
+ * 描边的颜色、偏移不是 transform / opacity，同 `.checkDraw` 一样是这套动效规矩的例外。
+ */
+@keyframes focusRing {
+  from {
+    outline-color: transparent;
+    outline-offset: 6px;
+  }
+}
+
+:where(.root) :where(:focus-visible) {
+  animation: focusRing 220ms var(--wl-ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(.root) :where(:focus-visible) {
+    animation: none;
+  }
+
+  /* 兜底：各处没单独关掉的过渡一律瞬时完成（不改 transitionend 的触发）。 */
+  .root *,
+  .root *::before,
+  .root *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: 兜底要压过各处自己写的过渡 */
+    transition-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上 */
+    transition-delay: 0s !important;
+  }
+}
+
+/* 不认 linear() 的老内核：弹簧退回成贝塞尔曲线。 */
+@supports not (animation-timing-function: linear(0, 1)) {
+  .root {
+    --wl-spring: cubic-bezier(0.34, 1.1, 0.64, 1);
+    --wl-spring-bouncy: cubic-bezier(0.34, 1.3, 0.64, 1);
+  }
+}
+
+/*
+ * 画布占满会话详情页：把会话页自己的输入框与列宽拖拽柄藏掉。
+ *
+ * 宿主把它们渲染成活动视图的兄弟，且没有"某个视图不显示输入框"的开关。`:has()` 把作用域
+ * 限定在"我的视图挂载着"这一种情况下：切回「对话」时根节点卸载，它们自己回来。
+ * 选的是宿主的 data 属性（给外部的稳定钩子），不是会在版本间变的哈希类名。
+ */
+:global(
+  [data-conversation-content]:has([data-workflow-lite-view]) [data-conversation-region="composer"]
+),
+:global([data-conversation-content]:has([data-workflow-lite-view]) [data-width-handle]) {
+  display: none;
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  transition: opacity 320ms var(--wl-ease-out);
+}
+
+/* 内容还没到（刚切到实例视图、第一次加载）：先透明，到了淡入。 */
+.canvas[data-hidden] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 切换工作流：旧图压暗留着（点不了），新图到了再亮回来——不卸载重建，画布不闪。 */
+.canvas[data-dim] {
+  opacity: 0.4;
+  transition-duration: 160ms;
+  pointer-events: none;
+}
+
+/* ── 顶栏 ─────────────────────────────────────────────────── */
+
+.top {
+  position: absolute;
+  top: var(--wl-gap);
+  right: var(--wl-gap);
+  left: var(--wl-gap);
+  z-index: 6;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  /* 顶栏中间那段空白要能透过去点到画布。 */
+  pointer-events: none;
+}
+
+.top > * {
+  pointer-events: auto;
+}
+
+/* ── 步骤库（左）──────────────────────────────────────────── */
+
+.library {
+  position: absolute;
+  top: var(--wl-top);
+  bottom: var(--wl-gap);
+  left: var(--wl-gap);
+  z-index: 4;
+  width: var(--wl-library-w);
+  transition:
+    transform 460ms var(--wl-spring),
+    opacity 180ms linear,
+    visibility 0s;
+}
+
+.root[data-library="closed"] .library {
+  visibility: hidden;
+  opacity: 0;
+  transform: translateX(-56px);
+  /* 先滑走再隐藏：`visibility` 等过渡走完才切，收起的库不留在 Tab 序里。 */
+  transition:
+    transform 200ms var(--wl-ease),
+    opacity 160ms linear,
+    visibility 0s 200ms;
+}
+
+/* ── 属性面板（右）────────────────────────────────────────── */
+
+.inspector {
+  position: absolute;
+  top: var(--wl-top);
+  right: var(--wl-gap);
+  bottom: var(--wl-gap);
+  z-index: 5;
+  width: var(--wl-inspector-w);
+  /* 和步骤库展开同一套（方向相反）：位移 240ms 缓出、透明度 180ms 匀速。收起见 motion.tsx 的 closeOut。 */
+  animation:
+    slideIn 460ms var(--wl-spring) both,
+    panelFade 180ms linear both;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(64px);
+  }
+}
+
+@keyframes panelFade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sheetIn {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
+/* ── 左下角：缩放与快捷键 ─────────────────────────────────── */
+
+.dock {
+  position: absolute;
+  bottom: var(--wl-gap);
+  left: var(--wl-gap);
+  z-index: 4;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  /* 边框画在底面上（见 .dockSurface），内边距补上那 1px。 */
+  padding: 4px;
+  isolation: isolate;
+  /* 步骤库开着时让到它右边：位置靠 transform 挪。 */
+  transform: translateX(calc(var(--wl-library-w) + var(--wl-gap)));
+  transition: transform 240ms var(--wl-ease);
+}
+
+/*
+ * 底面（边框、底色、阴影）单独一层：宽度一变（整排图例 ↔ 「图例」按钮）由 useGlide 用 scaleX 收放，
+ * 只动 transform。进场的那一边（图例 / 按钮）淡入，退场的那一边随布局直接让位。
+ */
+.dockSurface {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 1px solid var(--wl-line);
+  border-radius: var(--wl-r-panel);
+  background: var(--wl-panel);
+  box-shadow: var(--wl-shadow-1);
+  pointer-events: none;
+  transform-origin: 0 50%;
+}
+
+@keyframes dockFade {
+  from {
+    opacity: 0;
+  }
+}
+
+.root[data-library="closed"] .dock {
+  transform: translateX(0);
+}
+
+.zoom {
+  min-width: 44px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.keys {
+  width: 250px;
+  padding: 10px 12px;
+}
+
+.keysTitle {
+  margin: 0 0 6px;
+  font-size: var(--wl-fs-body);
+  font-weight: 600;
+}
+
+.keysRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-meta);
+}
+
+.keysRow span:last-child {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* ── 线条图例（缩放条右半截）─────────────────────────────── */
+
+.legend {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin: 0;
+  padding: 0 4px 0 0;
+  list-style: none;
+  transition: opacity 200ms linear;
+}
+
+/* 图例和「图例」按钮共用一个座位：收起时整排图例不摘掉，叠在座位上原处淡出，缩放条的底面同时收短。 */
+.legendSlot {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.legendItem {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: calc(6px * var(--wl-round, 1));
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: default;
+  transition: background-color 120ms linear;
+}
+
+.legendItem:hover {
+  background: var(--wl-hover);
+}
+
+/* 线的小样本（整排图例、收起后的图例单、按钮上的三道线共用）：颜色跟着 `data-line` 走。 */
+.legend svg,
+.legendRow svg {
+  flex: none;
+  overflow: visible;
+}
+
+.dock [data-line] line,
+.dock line[data-line] {
+  stroke: var(--wl-line-color);
+  stroke-width: 1.8;
+}
+
+.dock [data-line] path {
+  fill: var(--wl-line-color);
+}
+
+.dock [data-line="always"] {
+  --wl-line-color: var(--wl-flow-always);
+}
+
+.dock [data-line="pass"] {
+  --wl-line-color: var(--wl-flow-pass);
+}
+
+.dock [data-line="fail"] {
+  --wl-line-color: var(--wl-flow-fail);
+}
+
+.dock [data-line="custom"] {
+  --wl-line-color: var(--wl-flow-custom);
+}
+
+.dock [data-line="produce"] {
+  --wl-line-color: var(--wl-io-produce);
+}
+
+.dock [data-line="update"] {
+  --wl-line-color: var(--wl-io-update);
+}
+
+.dock [data-line="read"] {
+  --wl-line-color: var(--wl-io-read);
+}
+
+.dock [data-line="read"] line,
+.dock line[data-line="read"] {
+  stroke-dasharray: 4 3;
+}
+
+.dock [data-line="ask"] {
+  --wl-line-color: var(--wl-io-ask);
+}
+
+.dock [data-line="ask"] line {
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+}
+
+/* 连接点图例：空心圈 = 入口，实心点 = 出口。各种线都这样，所以样本用中性色。 */
+.legendItem[data-port] circle {
+  stroke: var(--wl-text-2);
+  stroke-width: 1.8;
+}
+
+.legendItem[data-port="in"] circle {
+  fill: var(--wl-panel);
+}
+
+.legendItem[data-port="out"] circle {
+  fill: var(--wl-text-2);
+}
+
+/* 三组（流程线 / 读写线 / 连接点）之间的一道细竖线。 */
+.legendSep {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--wl-line-strong);
+}
+
+/* 放不下整排图例时的收起形态：一个「图例」按钮（三道彩线 + 字），点开是一张图例单。 */
+.legendCompact {
+  display: none;
+  animation: dockFade 200ms linear both;
+}
+
+.legendToggle {
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+}
+
+.legendToggle line[data-line] {
+  stroke-linecap: round;
+}
+
+.legendPop {
+  width: 344px;
+  padding: 10px 12px;
+}
+
+.legendGroup + .legendGroup {
+  margin-top: 8px;
+}
+
+.legendHead {
+  margin: 0 0 4px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+}
+
+.legendRow {
+  display: grid;
+  grid-template-columns: 20px 44px 1fr;
+  gap: 8px;
+  align-items: center;
+  min-height: 24px;
+  font-size: var(--wl-fs-micro);
+}
+
+.legendName {
+  color: var(--wl-text);
+  font-weight: 600;
+}
+
+.legendTip {
+  color: var(--wl-text-3);
+  line-height: 1.4;
+}
+
+.legendFoot {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--wl-line);
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.5;
+}
+
+/* ── 提示条 / 轻提示 ──────────────────────────────────────── */
+
+/* 居中用的位移放在座位上，入场动画放在里面那层——两个 transform 不打架。 */
+.bannerSeat {
+  position: absolute;
+  top: var(--wl-top);
+  left: 50%;
+  z-index: 7;
+  width: max-content;
+  max-width: min(560px, calc(100% - 2 * var(--wl-gap)));
+  transform: translateX(-50%);
+}
+
+.banner {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 6px 6px 12px;
+  font-size: var(--wl-fs-meta);
+}
+
+.bannerDanger {
+  border-color: color-mix(in srgb, var(--wl-danger) 40%, transparent);
+}
+
+.bannerText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.bannerIds {
+  color: var(--wl-text-3);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+}
+
+.toastSeat {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  z-index: 40;
+  max-width: calc(100% - 2 * var(--wl-gap));
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.toast {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: var(--wl-tip);
+  color: var(--wl-tip-on);
+  font-size: var(--wl-fs-meta);
+  font-weight: 500;
+  box-shadow: var(--wl-shadow-2);
+}
+
+.toast[data-tone="error"] {
+  background: var(--wl-danger);
+  color: var(--wl-accent-on);
+}
+
+/* ── 居中的整页状态（欢迎 / 读不了）───────────────────────── */
+
+.stage {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 72px 16px 24px;
+  overflow: auto;
+}
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  width: min(420px, 100%);
+  padding: 32px 28px 28px;
+  text-align: center;
+}
+
+.welcomeArt {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: var(--wl-text-3);
+}
+
+.welcomeTitle {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.welcomeBody {
+  margin: 0 0 12px;
+  color: var(--wl-text-3);
+}
+
+.welcomeList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--wl-line);
+  text-align: left;
+}
+
+.broken {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(680px, 100%);
+  max-height: 100%;
+  padding: 20px;
+}
+
+.brokenHead {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.brokenIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-danger-soft);
+  color: var(--wl-danger);
+}
+
+.brokenTitle {
+  margin: 0;
+  font-size: var(--wl-fs-title);
+  font-weight: 600;
+}
+
+.brokenBody {
+  margin: 2px 0 0;
+  color: var(--wl-text-3);
+}
+
+.brokenMessage {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-danger-soft);
+  color: var(--wl-danger);
+  font-size: var(--wl-fs-meta);
+}
+
+.raw {
+  flex: 1 1 auto;
+  min-height: 80px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/*
+ * 整排图例放得下才摊开，放不下就收成「图例」按钮——缩放条不能伸到右侧面板底下。
+ * 门槛 = 缩放条连同整排图例约 840px + 左边的步骤库（开着时）+ 右边的面板（开着时，最宽 360px）+ 间距，
+ * 留了些余量给英文界面。
+ */
+@container (max-width: 910px) {
+  .legend {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: max-content;
+    visibility: hidden;
+    opacity: 0;
+    transition:
+      opacity 140ms linear,
+      visibility 0s 140ms;
+    pointer-events: none;
+  }
+
+  .legendCompact {
+    display: inline-flex;
+  }
+}
+
+@container (max-width: 1150px) {
+  .root[data-library="open"] .legend {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: max-content;
+    visibility: hidden;
+    opacity: 0;
+    transition:
+      opacity 140ms linear,
+      visibility 0s 140ms;
+    pointer-events: none;
+  }
+
+  .root[data-library="open"] .legendCompact {
+    display: inline-flex;
+  }
+}
+
+@container (max-width: 1290px) {
+  .root[data-panel="open"] .legend {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: max-content;
+    visibility: hidden;
+    opacity: 0;
+    transition:
+      opacity 140ms linear,
+      visibility 0s 140ms;
+    pointer-events: none;
+  }
+
+  .root[data-panel="open"] .legendCompact {
+    display: inline-flex;
+  }
+}
+
+@container (max-width: 1530px) {
+  .root[data-library="open"][data-panel="open"] .legend {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: max-content;
+    visibility: hidden;
+    opacity: 0;
+    transition:
+      opacity 140ms linear,
+      visibility 0s 140ms;
+    pointer-events: none;
+  }
+
+  .root[data-library="open"][data-panel="open"] .legendCompact {
+    display: inline-flex;
+  }
+}
+
+/* ── 窄视图：属性面板变成底部抽屉，步骤库盖在画布上 ───────── */
+
+@container (max-width: 760px) {
+  .inspector {
+    top: auto;
+    right: 8px;
+    left: 8px;
+    width: auto;
+    height: min(62%, 460px);
+    animation-name: sheetIn;
+  }
+
+  .dock,
+  .root[data-library="closed"] .dock {
+    transform: none;
+  }
+
+  .root[data-library="open"] .dock {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .canvas,
+  .library,
+  .dock {
+    transition: none;
+  }
+
+  .inspector,
+  .legend,
+  .legendCompact,
+  .root input[aria-invalid="true"],
+  .root textarea[aria-invalid="true"] {
+    animation: none;
+  }
+}
+
+/* 藏着的时候界面还在换到最终的样子（比如模板换成实例、步骤库收起）：直接到位，别在淡入时露出半截动画。 */
+.root[data-booting="true"] *,
+.root[data-booting="true"] *::before,
+.root[data-booting="true"] *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: 要压过各处自己写的过渡 */
+  transition: none !important;
+}

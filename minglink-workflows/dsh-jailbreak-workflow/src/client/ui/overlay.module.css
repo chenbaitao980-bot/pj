@@ -1,0 +1,402 @@
+/**
+ * dsh-workflow-lite — 盖在画布上的东西：计划对话框、就地添加菜单。
+ */
+
+/* ── 计划对话框 ───────────────────────────────────────────── */
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--wl-scrim);
+  animation: scrimIn 260ms linear backwards;
+}
+
+@keyframes scrimIn {
+  from {
+    opacity: 0;
+  }
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 100%);
+  height: min(760px, 100%);
+  overflow: hidden;
+  box-shadow: var(--wl-shadow-2);
+  outline: none;
+  animation:
+    dialogIn 520ms var(--wl-spring) backwards,
+    dialogFade 200ms linear backwards;
+}
+
+/*
+ * 弹簧放大浮起：从 0.8 大、低 32px 的地方弹到位，略过冲再收住（--wl-spring）。
+ * 缩放的原点由 Modal 在打开前量好、写成行内 `transform-origin`（从触发它的按钮、点的位置长出来）；
+ * 没量到就是卡片中心。淡入单独一条（弹簧的过冲会被 opacity 截在 1，放在一起会让淡入看着过早收住）。
+ * 收起见 primitives 的 ghostOut。
+ */
+@keyframes dialogIn {
+  from {
+    transform: translateY(32px) scale(0.8);
+  }
+}
+
+@keyframes dialogFade {
+  from {
+    opacity: 0;
+  }
+}
+
+.dialogHead {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 12px 4px 18px;
+}
+
+.dialogTitle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-right: 8px;
+  font-size: var(--wl-fs-title);
+  font-weight: 600;
+}
+
+.planId {
+  padding: 1px 6px;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+  font-weight: 400;
+}
+
+.versions {
+  width: 200px;
+}
+
+.views {
+  width: 128px;
+}
+
+.dialogHint {
+  flex: none;
+  margin: 0;
+  padding: 0 18px 10px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+}
+
+.dialogBody {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0 12px 12px;
+  overflow: hidden;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-panel);
+}
+
+.planScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.planDoc {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 18px 24px 28px;
+}
+
+.plan {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--wl-text);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-meta);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  scrollbar-width: thin;
+}
+
+.loading {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wl-text-3);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--wl-line-strong);
+  border-top-color: var(--wl-accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.failure {
+  margin: 16px;
+  color: var(--wl-danger);
+}
+
+.blocked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.blockedTitle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 8px;
+  color: var(--wl-danger);
+  font-weight: 600;
+}
+
+.blockedItem {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+  color: var(--wl-text);
+  font: inherit;
+  font-size: var(--wl-fs-meta);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.blockedItem:hover {
+  background: var(--wl-hover);
+}
+
+.blockedItem:disabled {
+  cursor: default;
+}
+
+/* ── 就地添加 ─────────────────────────────────────────────── */
+
+.quick {
+  position: absolute;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 260px;
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  padding: 6px;
+  box-shadow: var(--wl-shadow-2);
+  transform-origin: top left;
+  animation: quickIn 380ms var(--wl-spring) backwards;
+}
+
+@keyframes quickIn {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+}
+
+.quickKind {
+  width: 22px;
+  height: 22px;
+  border-radius: calc(6px * var(--wl-round, 1));
+}
+
+/* ── 模态框（编辑一项内容）────────────────────────────────── */
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  box-shadow: var(--wl-shadow-2);
+  outline: none;
+  animation:
+    dialogIn 520ms var(--wl-spring) backwards,
+    dialogFade 200ms linear backwards;
+}
+
+/* 工作流设置：四张执行方式卡片要并排放得下，内容也不该一打开就滚动——给宽一点、高一点。 */
+.sheetSettings {
+  width: min(580px, 100%);
+  min-height: min(440px, 100%);
+}
+
+/* 放大看图：画布要占满模态框，高度给到 780，窄屏时跟着视口走。 */
+.sheetZoom {
+  width: min(1080px, 100%);
+  height: min(780px, 100%);
+}
+
+.sheetForm {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sheetHead {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+  /* 内容边 `--wl-sheet-inset`（缺省 16px）；右边再减 5.5：✕ 的图形（15px，在 28px 的按钮里）右缘正好落在内容边上。 */
+  padding: 14px calc(var(--wl-sheet-inset, 16px) - 5.5px) 6px var(--wl-sheet-inset, 16px);
+}
+
+.sheetIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: calc(9px * var(--wl-round, 1));
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.sheetTitles {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sheetTitle {
+  margin: 0;
+  font-size: var(--wl-fs-title);
+  font-weight: 600;
+}
+
+.sheetSub {
+  margin: 0;
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheetBody {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.sheetFoot {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  padding: 10px var(--wl-sheet-inset, 16px);
+  border-top: 1px solid var(--wl-line);
+}
+
+.sheetKeys {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  white-space: nowrap;
+}
+
+@container (max-width: 520px) {
+  .sheetKeys {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim,
+  .dialog,
+  .quick,
+  .sheet {
+    animation: none;
+  }
+}
+
+/* 就地添加菜单里的「用户输入」项：输入卡的墨色。 */
+.quickInput {
+  background: var(--wl-ask-soft);
+  color: var(--wl-io-ask);
+}
+
+/* 就地添加菜单里的「文件」项：文件卡的颜色。 */
+.quickFile {
+  background: var(--wl-file-soft);
+  color: var(--wl-file);
+}
+
+/* 瑞士：标题加粗、字距收紧。 */
+:global([data-look="swiss"]) .dialogTitle {
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+/* 瑞士：标题加粗、字距收紧。 */
+:global([data-look="swiss"]) .sheetTitle {
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+/* 就地添加菜单里的「记忆」项：记忆色。 */
+.quickMemory {
+  background: color-mix(in oklab, var(--wl-memory) 14%, transparent);
+  color: var(--wl-memory);
+}
+
+/*
+ * 就地添加菜单里名字短、说明长：名字整个留着，说明放不下就截成省略号
+ * （通用菜单是反过来的——名字可能很长、右边是时间之类不能截的短字）。
+ */
+.quick .quickLabel {
+  flex: none;
+  max-width: 60%;
+}
+
+.quick .quickMeta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

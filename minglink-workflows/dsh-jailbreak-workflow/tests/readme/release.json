@@ -1,0 +1,327 @@
+{
+  "_说明": "「版本更新卡片」的内容（pnpm run release-card [版本号] [zh|en]）。intro 写一次：插件是什么、安装标签等固定文字。versions 按版本号各写一段：headline 一句话说重点（≤ 20 个汉字 / 40 个英文字符）；items 挑 4 条（两列排，4 条正好两行），每条写 icon（src/client/ui/Icon.tsx 里的图标名）、tone（blue / green / gold / teal）、title（≤ 8 个汉字 / 18 个英文字符）、text（一行放下：≤ 16 个汉字 / 32 个英文字符，不重复 headline 和 title 说过的；整张图的句子末尾都不加句号），小签写 tag。版本号要在 CHANGELOG.md 里有。",
+  "intro": {
+    "zh": {
+      "kicker": "工作流插件",
+      "text": "在画布上编排步骤、分支和循环，进度实时回到画布",
+      "compat": "适配 DeepSeek Harness 0.2.x",
+      "updates": "本版更新",
+      "install": "安装"
+    },
+    "en": {
+      "kicker": "A workflow plugin",
+      "text": "Lay out steps, branches and loops on a canvas, and watch progress live on it",
+      "compat": "Works with DeepSeek Harness 0.2.x",
+      "updates": "What's new",
+      "install": "Install"
+    }
+  },
+  "versions": {
+    "0.6.0": {
+      "zh": {
+        "headline": "把工作流导出成 Skill，不装插件也能用",
+        "items": [
+          {
+            "icon": "cube",
+            "tone": "blue",
+            "title": "导出成 Skill",
+            "tag": "实验性",
+            "text": "下载 zip 或一键装到本机"
+          },
+          {
+            "icon": "folderOpen",
+            "tone": "green",
+            "title": "文件夹两栏浏览",
+            "text": "左边列文件，右边按类型预览"
+          },
+          {
+            "icon": "note",
+            "tone": "gold",
+            "title": "计划更清晰",
+            "text": "重新编排，篇幅缩到约五分之一"
+          },
+          {
+            "icon": "palette",
+            "tone": "teal",
+            "title": "界面打磨",
+            "text": "看图可缩放，选 Skill 更顺手"
+          }
+        ]
+      },
+      "en": {
+        "headline": "Export workflows as standalone Skills",
+        "items": [
+          {
+            "icon": "cube",
+            "tone": "blue",
+            "title": "Export as a Skill",
+            "tag": "Beta",
+            "text": "Zip download or local install"
+          },
+          {
+            "icon": "folderOpen",
+            "tone": "green",
+            "title": "Two-pane folders",
+            "text": "Files left, previews right"
+          },
+          {
+            "icon": "note",
+            "tone": "gold",
+            "title": "Clearer plans",
+            "text": "About a fifth the length"
+          },
+          {
+            "icon": "palette",
+            "tone": "teal",
+            "title": "UI polish",
+            "text": "Zoom images, pick skills faster"
+          }
+        ]
+      }
+    },
+    "0.7.0": {
+      "zh": {
+        "headline": "让工作流记住跑通的做法，下次照着走",
+        "items": [
+          {
+            "icon": "idea",
+            "tone": "blue",
+            "title": "工作流记忆",
+            "tag": "实验性",
+            "text": "沉淀做法，整理出快速路径"
+          },
+          {
+            "icon": "library",
+            "tone": "green",
+            "title": "记忆库",
+            "text": "多个工作流共用，存版本可切回"
+          },
+          {
+            "icon": "package",
+            "tone": "gold",
+            "title": "随包导出",
+            "text": "工作流包、Skill 都能带上记忆"
+          },
+          {
+            "icon": "layers",
+            "tone": "teal",
+            "title": "画布更顺手",
+            "text": "步骤库分组可收起，右键加步骤"
+          }
+        ]
+      },
+      "en": {
+        "headline": "Workflows remember what worked",
+        "items": [
+          {
+            "icon": "idea",
+            "tone": "blue",
+            "title": "Workflow memory",
+            "tag": "Beta",
+            "text": "Quick paths distilled from runs"
+          },
+          {
+            "icon": "library",
+            "tone": "green",
+            "title": "Memory library",
+            "text": "Share and version memories"
+          },
+          {
+            "icon": "package",
+            "tone": "gold",
+            "title": "Exports carry it",
+            "text": "Packs and Skills include memory"
+          },
+          {
+            "icon": "layers",
+            "tone": "teal",
+            "title": "Smoother canvas",
+            "text": "Fold groups, right-click to add"
+          }
+        ]
+      }
+    },
+    "0.9.0": {
+      "zh": {
+        "headline": "看板、日志、图直接显示在画布上",
+        "items": [
+          {
+            "icon": "chart",
+            "tone": "blue",
+            "title": "画布展示",
+            "tag": "实验性",
+            "text": "看板、图片、文档直接上画布"
+          },
+          {
+            "icon": "history",
+            "tone": "green",
+            "title": "逐轮回看",
+            "text": "刻度轴切换，任挑两轮对比"
+          },
+          {
+            "icon": "terminal",
+            "tone": "gold",
+            "title": "日志与表格",
+            "text": "筛选、排序，几百 MB 也流畅"
+          },
+          {
+            "icon": "sparkle",
+            "tone": "teal",
+            "title": "模型适配展示",
+            "text": "按卡片大小写看板、出图"
+          }
+        ]
+      },
+      "en": {
+        "headline": "Outputs shown right on the canvas",
+        "items": [
+          {
+            "icon": "chart",
+            "tone": "blue",
+            "title": "Canvas display",
+            "tag": "Beta",
+            "text": "Boards, images, docs in place"
+          },
+          {
+            "icon": "history",
+            "tone": "green",
+            "title": "Round replay",
+            "text": "Scrub rounds, compare any two"
+          },
+          {
+            "icon": "terminal",
+            "tone": "gold",
+            "title": "Logs & tables",
+            "text": "Filter and sort, even huge files"
+          },
+          {
+            "icon": "sparkle",
+            "tone": "teal",
+            "title": "Fits the card",
+            "text": "Models write for the card size"
+          }
+        ]
+      }
+    },
+    "0.10.0": {
+      "zh": {
+        "headline": "图多的时候更稳、更顺手",
+        "items": [
+          {
+            "icon": "library",
+            "tone": "blue",
+            "title": "列表折叠",
+            "text": "最近 12 个，其余收进显示全部"
+          },
+          {
+            "icon": "reload",
+            "tone": "green",
+            "title": "刷新更快",
+            "text": "图没变的不再重读一遍"
+          },
+          {
+            "icon": "info",
+            "tone": "gold",
+            "title": "错误隔离",
+            "text": "一块出错不拖垮整个页面"
+          },
+          {
+            "icon": "search",
+            "tone": "teal",
+            "title": "改键名有提示",
+            "text": "打错的字段会被指出来"
+          }
+        ]
+      },
+      "en": {
+        "headline": "Steadier and snappier with many graphs",
+        "items": [
+          {
+            "icon": "library",
+            "tone": "blue",
+            "title": "Folded lists",
+            "text": "Most recent 12, rest folded"
+          },
+          {
+            "icon": "reload",
+            "tone": "green",
+            "title": "Faster refresh",
+            "text": "Only changed graphs reread"
+          },
+          {
+            "icon": "info",
+            "tone": "gold",
+            "title": "Contained errors",
+            "text": "One view fails, not the page"
+          },
+          {
+            "icon": "search",
+            "tone": "teal",
+            "title": "Clearer checks",
+            "text": "Misspelled keys are flagged"
+          }
+        ]
+      }
+    },
+    "0.11.0": {
+      "zh": {
+        "headline": "四百步的工作流也不卡了",
+        "items": [
+          {
+            "icon": "rocket",
+            "tone": "blue",
+            "title": "拖拽满帧",
+            "text": "四百步，每帧 17 毫秒"
+          },
+          {
+            "icon": "search",
+            "tone": "green",
+            "title": "走线更快",
+            "text": "空间网格，不再遍历全表"
+          },
+          {
+            "icon": "moon",
+            "tone": "gold",
+            "title": "动时省力",
+            "text": "阴影动效暂歇，停手即回"
+          },
+          {
+            "icon": "clock",
+            "tone": "teal",
+            "title": "打开更快",
+            "text": "切图从 1.3 秒到 0.5 秒"
+          }
+        ]
+      },
+      "en": {
+        "headline": "400-step workflows no longer stutter",
+        "items": [
+          {
+            "icon": "rocket",
+            "tone": "blue",
+            "title": "Full-frame drag",
+            "text": "400 steps, 17 ms a frame"
+          },
+          {
+            "icon": "search",
+            "tone": "green",
+            "title": "Faster routing",
+            "text": "Spatial grid, not full scans"
+          },
+          {
+            "icon": "moon",
+            "tone": "gold",
+            "title": "Lighter in motion",
+            "text": "Shadows pause, snap back"
+          },
+          {
+            "icon": "clock",
+            "tone": "teal",
+            "title": "Opens faster",
+            "text": "Switching: 1.3 s to 0.5 s"
+          }
+        ]
+      }
+    }
+  }
+}

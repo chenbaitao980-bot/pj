@@ -1,0 +1,401 @@
+/* 记忆：加记忆的小菜单、面板里的记忆信息、工作流中心的「记忆」页。 */
+
+.picker {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  animation: pickerIn 120ms ease-out backwards;
+}
+
+@keyframes pickerIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.pickList {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* 「N 个工作流在用」一列右对齐，几行对得齐。 */
+.pickMeta {
+  min-width: 84px;
+  text-align: right;
+}
+
+/* 面板里：这张卡引用的那条记忆。图标占两行高，类型在上、谁在用在下，「换一条」在行尾。 */
+.info {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 1px 10px;
+  align-items: center;
+  min-height: 46px;
+  padding: 6px 8px;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-panel);
+}
+
+.info[data-missing="true"] {
+  border-color: color-mix(in srgb, var(--wl-warn) 45%, var(--wl-line));
+}
+
+.infoIcon {
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: calc(8px * var(--wl-round, 1));
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.info[data-missing="true"] .infoIcon {
+  background: color-mix(in srgb, var(--wl-warn) 14%, transparent);
+  color: var(--wl-warn);
+}
+
+.infoType {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 还有别的工作流在用：改这里等于改它们，提一下。 */
+.infoUsed {
+  grid-column: 2;
+  min-width: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.45;
+}
+
+.infoUsed[data-shared="true"] {
+  color: var(--wl-text-2);
+}
+
+/* 行尾的动作和下面一行同一档字：不比卡里的字大、不抢类型那一行。
+   多写一层 .info：ui.module.css 的 .small 同权重、排在后面，不加会盖掉这里的字号。 */
+.info .infoAction {
+  grid-row: 1 / span 2;
+  grid-column: 3;
+  gap: 4px;
+  font-size: var(--wl-fs-micro);
+  font-weight: 400;
+}
+
+.missing {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  color: var(--wl-warn);
+  font-size: var(--wl-fs-meta);
+  line-height: 1.5;
+}
+
+:global([data-look="swiss"]) .picker {
+  box-shadow: none;
+}
+
+:global([data-look="swiss"]) .info {
+  border-width: 1px 0;
+  background: transparent;
+}
+
+/* ── 工作流中心「记忆」页 ─────────────────────────────── */
+
+/* 右栏头：图标 + 名称（输入框当标题）+ 类型和 id，右边是查看文件。 */
+/* 「记忆」页左边列表的第二行：类型小标签 + 用量，一行放得下。 */
+.listMeta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  white-space: nowrap;
+}
+
+.listTag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(4px * var(--wl-round, 1));
+  color: var(--wl-text-3);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.listUsed {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 没被任何工作流用到：淡一点，和有人在用的区分开。 */
+.listUsed[data-unused="true"] {
+  opacity: 0.7;
+}
+
+.hubHead {
+  display: flex;
+  flex: none;
+  gap: 12px;
+  align-items: center;
+}
+
+.hubIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.hubHeadText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* 眼睛在名称右边；名称只占文字那么宽，悬停的底色和提示都贴着字。 */
+.hubNameRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.hubNameRow > button {
+  flex: none;
+}
+
+.hubName {
+  box-sizing: border-box;
+  flex: 0 1 auto;
+  field-sizing: content;
+  min-width: 4ch;
+  max-width: 100%;
+  height: 28px;
+  margin: 0 0 0 -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: calc(6px * var(--wl-round, 1));
+  outline: 2px solid transparent;
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  font-size: var(--wl-fs-title);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  transition: background-color 120ms linear;
+}
+
+.hubName:hover {
+  background: var(--wl-hover);
+}
+
+.hubName:focus-visible {
+  outline-color: var(--wl-accent);
+  background: var(--wl-fill);
+}
+
+.hubName::placeholder {
+  color: var(--wl-text-3);
+}
+
+.hubTag {
+  display: inline-flex;
+  margin-right: 8px;
+  padding: 0 7px;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+  line-height: 17px;
+}
+
+/* 三个数：一张卡里三行，左边名、右边值，行间细线。 */
+.stats {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-panel);
+}
+
+.stat {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 7px 12px;
+}
+
+.stat + .stat {
+  border-top: 1px solid var(--wl-line);
+}
+
+.statLabel {
+  flex: none;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.statValue {
+  overflow: hidden;
+  font-size: var(--wl-fs-meta);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 详情正文：左边这条记忆的信息（数、描述、谁在用），右边是它的版本，版本占满剩下的高度。 */
+.hubBody {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 252px minmax(0, 1fr);
+  gap: 20px;
+  /* 窗口再矮也留这么高给版本框，不够就整栏滚。 */
+  min-height: 300px;
+}
+
+.hubInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding-right: 2px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.hubInfo > :nth-child(n + 3) {
+  margin-top: 6px;
+}
+
+.hubVers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 窗口窄：上下叠着，整栏滚；版本框固定这么高、在里面滚。 */
+@media (max-width: 900px) {
+  .hubBody {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+  }
+
+  .hubVers {
+    flex: none;
+    height: 400px;
+  }
+}
+
+/* 一节：小标题 + 内容。 */
+.sec {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.secHead {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+}
+
+.hubDesc {
+  flex: none;
+  /* 高度固定：不管有没有字、谁在用，下面各节的位置都不动。 */
+  height: 100px;
+  min-height: 0;
+  resize: none;
+}
+
+/* 在用的工作流：一张一块，点了打开它。 */
+.usedRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: var(--wl-fs-meta);
+  /* 用到它的工作流很多：框住，在里面滚，不把上面的描述挤没。 */
+  max-height: 116px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.usedNone {
+  margin: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+}
+
+.usedChip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  max-width: 200px;
+  padding: 2px 9px;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-2);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.usedChip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usedChip:hover {
+  color: var(--wl-accent-text);
+}
+
+:global([data-look="swiss"]) .usedChip {
+  border-width: 0 0 1px;
+  border-color: var(--wl-line-strong);
+}
+
+:global([data-look="swiss"]) .stats {
+  border-width: 1px 0;
+  background: transparent;
+}
+
+:global([data-look="swiss"]) .hubTag {
+  border-radius: 0;
+}

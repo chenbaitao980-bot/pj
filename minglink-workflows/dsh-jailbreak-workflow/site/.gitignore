@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.astro/
+
+# 由 `pnpm run sync` 生成，不手改、不提交
+src/assets/brand/
+src/content/docs/changelog.md
+
+# docs-shots 的一次性产物（脚本参数没展开时留下过 `.shots$1.png` 这种文件，别再进库）
+.shots*.png

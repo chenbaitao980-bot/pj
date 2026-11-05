@@ -1,0 +1,41 @@
+# ===== 依赖与构建产物 =====
+node_modules/
+pnpm-store/
+dist/
+build/
+out/
+__pycache__/
+*.py[cod]
+
+# ===== 大型第三方包 / 安装程序（不入库）=====
+ghidra/
+desktop-installer/
+*.exe
+*.msi
+*.zip
+*.7z
+*.rar
+*.iso
+*.dmg
+
+# ===== 运行期产物与日志 =====
+*.log
+rea-test/out.json
+
+# ===== DSH 运行时状态与凭据（禁止入库）=====
+deepseek-harness/.dsh/.credentials.yaml
+deepseek-harness/.dsh/.env
+deepseek-harness/.dsh/.anonymous-user-id
+deepseek-harness/.dsh/logs/
+deepseek-harness/.dsh/sessions/
+deepseek-harness/.dsh/storages/
+deepseek-harness/.dsh/profiles/*/node_modules/
+deepseek-harness/.dsh/profiles/*/.plugin-manager/
+
+# ===== 系统与编辑器 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

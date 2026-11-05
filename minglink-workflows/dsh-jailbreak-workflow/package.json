@@ -1,0 +1,159 @@
+{
+  "name": "@xiaoso/dsh-workflow-lite",
+  "version": "0.11.0",
+  "description": "Lightweight agent workflow for DeepSeek Harness: one workflow = one JSON (React Flow native) with prompts inline, compiled into a dispatch plan the model executes itself. No execution engine; optional per-workflow run state kept by the model in a YAML file.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Minglink",
+  "publishConfig": {
+    "access": "public",
+    "tag": "latest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Minglink/dsh-jailbreak-workflow.git"
+  },
+  "homepage": "https://github.com/Minglink/dsh-jailbreak-workflow",
+  "bugs": {
+    "url": "https://github.com/Minglink/dsh-jailbreak-workflow/issues"
+  },
+  "sideEffects": [
+    "lib/client.js"
+  ],
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-plugins",
+    "workflow",
+    "react-flow",
+    "soft-orchestration"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0"
+  },
+  "packageManager": "pnpm@11.21.0",
+  "main": "lib/index.mjs",
+  "types": "lib/types/index.d.ts",
+  "icon": "./assets/icon.webp",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.mjs"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "assets/hero.en.png",
+    "assets/hero.zh.png",
+    "assets/icon-full.webp",
+    "assets/icon.webp",
+    "assets/poyazhi-canvas.webp",
+    "assets/poyazhi-flow.webp",
+    "assets/poyazhi-sidebar.webp",
+    "assets/versions.en.png",
+    "assets/versions.zh.png",
+    "assets/wordmark.png",
+    "cordis.patch.yml",
+    "lib/client.js",
+    "lib/index.mjs",
+    "lib/types/**/*.d.ts",
+    "locale/*.json",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "dsh": {
+    "manifestVersion": 1,
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-home-paths": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-0 <0.2.1-0 || >=0.2.1-0 <0.3.0-0"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "@xyflow/react": "^12.3.5",
+    "elkjs": "^0.9.3",
+    "fflate": "^0.8.3",
+    "markdown-it": "^15.0.2",
+    "markdown-it-cjk-friendly": "^3.0.0",
+    "pathe": "^2.0.3",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
+    "@deepseek-ai/cordis": "4.0.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-locale": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-session": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-home-paths": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-scope": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-user-approval": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-util-values": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-workspace": "0.2.1-rc.2",
+    "@types/node": "^22.19.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "lightningcss": "^1.32.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "scripts": {
+    "build": "tsdown && node scripts/notices.mjs",
+    "build:types": "node -e \"require('node:fs').rmSync('lib/types',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
+    "notices": "node scripts/notices.mjs",
+    "notices:check": "node scripts/notices.mjs --check",
+    "prepare": "pnpm run build:types && pnpm run build",
+    "prepublishOnly": "pnpm run typecheck && pnpm run lint && pnpm test",
+    "watch": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "hero": "node --experimental-strip-types tests/readme-shots.mjs && node tests/readme-hero.mjs",
+    "hero:render": "node tests/readme-hero.mjs",
+    "docs:shots": "node --experimental-strip-types tests/docs-shots.mjs",
+    "timeline": "node tests/readme-versions.mjs",
+    "release-card": "node tests/readme-release.mjs"
+  }
+}

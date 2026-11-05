@@ -1,0 +1,20 @@
+{
+  "name": "dsh-profile-web",
+  "private": true,
+  "dependencies": {
+    "@xiaoso/dsh-workflow-lite": "^0.9.0",
+    "dsh-desktop-plugin": "^1.5.12",
+    "dsh-purge": "link:E:/claude/project4/pj/dsh-purge"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-purge",
+        "@xiaoso/dsh-workflow-lite",
+        "dsh-desktop-plugin"
+      ]
+    }
+  }
+}

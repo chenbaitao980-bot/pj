@@ -1,0 +1,537 @@
+/**
+ * dsh-workflow-lite — 工作流版本：存的那一栏、状态行、版本列表（一行一个版本，点开看会变什么）。
+ *
+ * 行上的「切换 / 编辑说明 / 删除」和工作流下拉的行一个做法：平时透明，悬停、键盘移进来、
+ * 确认卡开着时淡入（只动透明度）。按钮的位置一直留着，说明文字不会钻到按钮底下。
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-height: 0;
+  /* 上面的提示条收掉时列表往上滑，不透明才能把淡出的影子盖住（见 useResizeFlip）。 */
+  background: var(--wl-panel);
+}
+
+/* 编辑页的版本对话框：比普通的编辑框宽一点、高度固定（列表在里面滚）。 */
+div.dialog {
+  width: min(720px, 100%);
+  height: min(620px, 100%);
+}
+
+/* 对话框正文整块不滚：存版本那一栏钉在上面，只有版本框在框里滚（.list）。 */
+div.body {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.saveBar {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+}
+
+.saveInput {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 「连同记忆一起存」：勾选框 + 记忆图标 + 一句，在状态行最右边（不挤存的那一行）。 */
+.withMem {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-meta);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.withMem:hover {
+  color: var(--wl-text);
+}
+
+/* 「版本」框标题栏里的「工作流 / 记忆」。 */
+.areas {
+  flex: none;
+  width: 220px;
+}
+
+/* 记忆一栏：左边这张引用的记忆（一条一行），右边是选中那条的版本。 */
+.memLayout {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 204px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+/* 列表的行、选中滑块沿用工作流中心那几列；这里只管框：右边一条分隔线，不要它自带的内边距。 */
+.memNav {
+  padding: 0 12px 0 0;
+  border-right: 1px solid var(--wl-line);
+}
+
+.memPane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 窄窗口：列表挪到上面，一行排开、横着滚。 */
+@media (max-width: 820px) {
+  .memLayout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .memNav {
+    flex-direction: row;
+    padding: 0 0 8px;
+    overflow: auto hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--wl-line);
+  }
+
+  .memNav > div {
+    flex: 0 0 180px;
+  }
+}
+
+.status {
+  display: flex;
+  flex: none;
+  gap: 12px;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 2px;
+  font-size: var(--wl-fs-micro);
+}
+
+/* 状态行里排最后的那一项靠右（只有它自己时不动）。 */
+.status > :last-child:not(:first-child) {
+  margin-left: auto;
+}
+
+.state {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--wl-text-3);
+}
+
+.stateDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wl-warn-dot);
+}
+
+.state[data-saved="true"] .stateDot {
+  background: var(--wl-ok-dot);
+}
+
+.notice {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--wl-ok);
+  font-weight: 500;
+}
+
+.notice[data-tone="error"] {
+  color: var(--wl-danger);
+}
+
+/* ── 列表 ─────────────────────────────────────────────────── */
+
+.list {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  /* 版本多了在框里滚，上面存版本那一栏不动；滚到头不带着外面一起滚。 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-panel);
+}
+
+.row {
+  position: relative;
+  /* 框放不下时是框在里面滚，行本身不被压扁。 */
+  flex: none;
+  /* 不透明：展开时下面的行从原位滑下去，像帘子一样盖着、再露出刚展开的变化。 */
+  background: var(--wl-panel);
+}
+
+.row + .row {
+  border-top: 1px solid var(--wl-line);
+}
+
+.main {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 54px;
+  /* 右边一直给三个按钮留着位置。 */
+  padding: 8px 108px 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  text-align: left;
+  isolation: isolate;
+}
+
+button.main {
+  cursor: pointer;
+}
+
+/* 悬停、展开时的底色画在 ::before 上、渐显（不在 background 上瞬切）。 */
+.main::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--wl-hover);
+  content: "";
+  opacity: 0;
+  transition: opacity 140ms linear;
+  pointer-events: none;
+}
+
+.row:hover .main::before,
+.row[data-open="true"] .main::before {
+  opacity: 1;
+}
+
+/*
+ * 通用的按下回弹（0.98 倍）在这里不要：这一行通栏，缩的时候底色会先从左右两边收进去，
+ * 而展开后下面那块说明不缩，两块对不齐。按下的反馈有悬停底色顶着。
+ */
+.main:active {
+  scale: none;
+}
+
+.main:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+.chevron {
+  display: grid;
+  flex: none;
+  order: -1;
+  place-items: center;
+  color: var(--wl-text-3);
+  transform: rotate(-90deg);
+  transition: transform 220ms var(--wl-ease);
+}
+
+.main[aria-expanded="true"] .chevron,
+.chevron[data-open="true"],
+.chevron[data-view="true"] {
+  transform: rotate(0deg);
+}
+
+.badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 34px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+}
+
+.badge[data-current="true"] {
+  background: var(--wl-ok-soft);
+  color: var(--wl-ok);
+}
+
+.text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.note {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note[data-empty="true"] {
+  color: var(--wl-text-3);
+  font-weight: 400;
+}
+
+/* 改说明：底线的样子在 ui.module.css 的 `.lineField`；上下各收进一点，占的高度和原来那行字一样，整行不变高；字对齐原来说明的字。 */
+.noteField {
+  width: calc(100% + 6px);
+  margin: -2px 0 -2px -6px;
+}
+
+.noteInput {
+  height: 24px;
+  font-weight: 500;
+}
+
+.meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  white-space: nowrap;
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+}
+
+.currentTag {
+  padding: 0 6px;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: var(--wl-ok-soft);
+  color: var(--wl-ok);
+  font-weight: 600;
+}
+
+/* ── 行上的按钮 ───────────────────────────────────────────── */
+
+.actions {
+  position: absolute;
+  top: 14px;
+  right: 10px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms linear;
+}
+
+.row:hover .actions,
+.row:focus-within .actions,
+.row[data-busy="true"] .actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.action {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-3);
+  cursor: pointer;
+  transition:
+    transform 120ms var(--wl-ease),
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.action:hover,
+.action[aria-expanded="true"] {
+  background: var(--wl-fill-strong);
+  color: var(--wl-text);
+}
+
+.action[data-danger="true"] {
+  transition:
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.action[data-danger="true"]:hover,
+.action[data-danger="true"][aria-expanded="true"] {
+  background: var(--wl-danger-soft);
+  color: var(--wl-danger);
+}
+
+.action:active {
+  transform: scale(0.92);
+}
+
+.action:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -1px;
+}
+
+/*
+ * ── 展开：切到这一版会变什么 ───────────────────────────────
+ * 底色那一块不动（下面的行像帘子一样滑下去把它露出来），只动里面的字：标题淡出来、各条变化依次浮出。
+ * 底色块本身不能淡入、不能位移：它和标题行的悬停底色都是半透明的一层，叠在一起或半透明时
+ * 会在两块交界处多出一条更亮的带子（暗色下尤其明显）。
+ */
+
+.diff {
+  padding: 2px 16px 12px 78px;
+  background: var(--wl-hover);
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+  line-height: 1.55;
+}
+
+.diff > :not(.diffList) {
+  animation: diffIn 220ms var(--wl-ease) backwards;
+}
+
+@keyframes diffIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* 「正在比较」：比得慢才出现（VersionRow 的 SLOW_MS），和标题一样淡进来。 */
+.diffLoading {
+  display: block;
+}
+
+.diffTitle {
+  margin: 0 0 4px;
+  font-size: var(--wl-fs-micro);
+}
+
+.diffList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: var(--wl-text-2);
+  list-style: none;
+}
+
+.diffLine {
+  position: relative;
+  padding-left: 14px;
+  animation: lineIn 240ms var(--wl-ease) backwards;
+  animation-delay: calc(min(var(--i, 0), 12) * 24ms + 60ms);
+}
+
+@keyframes lineIn {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+
+.diffLine::before {
+  position: absolute;
+  top: 0.62em;
+  left: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wl-accent);
+  content: "";
+}
+
+.diffLine[data-kind="added"]::before {
+  background: var(--wl-ok-dot);
+}
+
+.diffLine[data-kind="removed"]::before {
+  background: var(--wl-danger);
+}
+
+.diffLine b {
+  color: var(--wl-text);
+  font-weight: 600;
+}
+
+.diffMore {
+  margin: 4px 0 0 14px;
+}
+
+/* ── 空状态 ───────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  padding: 36px 24px 40px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+  text-align: center;
+}
+
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 6px;
+  border-radius: calc(12px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+}
+
+.emptyTitle {
+  margin: 0;
+  color: var(--wl-text);
+  font-weight: 600;
+}
+
+.emptyText {
+  max-width: 340px;
+  margin: 0;
+  line-height: 1.6;
+}
+
+@media (hover: none) {
+  .actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron,
+  .actions,
+  .action,
+  .main::before,
+  .diff > *,
+  .diffLine {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* 瑞士：成组的列表不再是一只圆角盒子，改成上下两道线（上面一道黑线），行与行之间照旧是细线。 */
+:global([data-look="swiss"]) .list {
+  border-width: 1px 0;
+  border-top-color: var(--wl-text);
+  border-bottom-color: var(--wl-line-strong);
+  background: transparent;
+}

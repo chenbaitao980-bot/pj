@@ -1,0 +1,264 @@
+/* 工作流设置对话框：三块（执行方式 / 执行时 / 产出根目录），开关与单选一律做成一行一项。 */
+
+/* 一块：标题行 + 内容。 */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── 执行方式：四张卡，两两一行 ───────────────────────────── */
+
+.modes {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+@container (max-width: 520px) {
+  .modes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * 一种执行方式 = 一张可选的卡：图标、名字、一句话。
+ * 选中的强调色底和描边是一块在四张卡之间滑动的选中框（`.modeThumb`，motion.tsx 的 PickThumb）；
+ * 卡自己只画平时的描边（伪元素，选中时淡掉），图标块的强调色也是淡入的一层。右上角出一个勾。
+ */
+.mode {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 1px 10px;
+  align-items: center;
+  padding: 9px 28px 9px 9px;
+  border: 1px solid transparent;
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms var(--wl-ease),
+    background-color 120ms linear;
+}
+
+.mode::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid var(--wl-line);
+  border-radius: inherit;
+  pointer-events: none;
+  transition: opacity 160ms linear;
+}
+
+.mode:hover {
+  background: var(--wl-hover);
+}
+
+.mode:hover::before {
+  border-color: var(--wl-line-strong);
+}
+
+.mode:active {
+  transform: scale(0.985);
+}
+
+.mode:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+.mode[aria-checked="true"]::before {
+  opacity: 0;
+}
+
+/* 选中的卡上不再叠悬停底色：选中框的浅蓝底就是它的底。 */
+.mode[aria-checked="true"] {
+  transition: background-color 120ms linear;
+}
+
+.mode[aria-checked="true"]:hover {
+  background: transparent;
+}
+
+.modeThumb {
+  border: 1px solid var(--wl-accent);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-accent-soft);
+}
+
+/* 图标块：灰底上叠一层强调色（选中时淡入），图标也是灰、白两枚叠着交叉淡。 */
+.modeIcon {
+  position: relative;
+  display: grid;
+  grid-row: span 2;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: calc(8px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+  --wl-on: var(--wl-accent-on);
+}
+
+.modeIcon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--wl-accent);
+  opacity: 0;
+  transition: opacity 200ms linear;
+}
+
+.modeIcon > * {
+  position: relative;
+}
+
+.mode[aria-checked="true"] .modeIcon::before {
+  opacity: 1;
+}
+
+.modeTitle {
+  font-size: var(--wl-fs-body);
+  font-weight: 600;
+}
+
+.modeDesc {
+  grid-column: 2;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.5;
+}
+
+/* 选中标记：全局统一的圆形勾选（ui.module.css 的 .check），这里只摆在卡片右上角。 */
+.modeCheck {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* ── 一行一项：图标、名字 +「?」、一句话、右边的控件 ─────── */
+
+/* 几行收进一个框，行间一条细线。 */
+.rows {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(10px * var(--wl-round, 1));
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 0 10px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 10px 8px 9px;
+  background: var(--wl-panel);
+}
+
+.row + .row {
+  border-top: 1px solid var(--wl-line);
+}
+
+/* 开关那种行整行都能点（`<label>` 把点击转给右边的开关）。 */
+label.row {
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+label.row:hover {
+  background: var(--wl-hover);
+}
+
+.rowIcon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: calc(8px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.rowTitle {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  font-size: var(--wl-fs-body);
+  font-weight: 600;
+}
+
+.rowDesc {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.5;
+}
+
+/* 用不上（串行时的复用执行者）：整行淡下去，控件不可点。 */
+.row[data-off="true"] .rowIcon,
+.row[data-off="true"] .rowTitle {
+  opacity: 0.55;
+}
+
+/* 复用执行者的三格单选：定宽，切换时说明换字、行不跳。 */
+.rowSeg {
+  width: 168px;
+}
+
+/* ── 开关：灰底，打开时叠一层蓝（只动 opacity），圆钮滑过去（只动 transform） ── */
+
+/* ── 产出根目录 ───────────────────────────────────────────── */
+
+.rootKind {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  font-weight: 500;
+}
+
+.rootKind[data-absolute="true"] {
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.rootReset {
+  height: 22px;
+  margin: -4px -6px -4px 0;
+  padding: 0 6px;
+  color: var(--wl-accent-text);
+  font-size: var(--wl-fs-micro);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode,
+  .mode::before,
+  .modeIcon::before {
+    transition: none;
+  }
+}
+
+/* 瑞士：成组的列表不再是一只圆角盒子，改成上下两道线（上面一道黑线），行与行之间照旧是细线。 */
+:global([data-look="swiss"]) .rows {
+  border-width: 1px 0;
+  border-top-color: var(--wl-text);
+  border-bottom-color: var(--wl-line-strong);
+  background: transparent;
+}

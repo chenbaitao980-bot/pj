@@ -1,0 +1,30 @@
+# 依赖与构建产物
+node_modules/
+
+# ⚠️ 锚定到仓库根（前导斜杠）。不锚的话 `lib/` 会匹配**任意层级**叫 lib 的目录，
+# 把 tests/lib/（验收脚本依赖的测试基建：cdp-session / web-session / canvas-harness）
+# 一起吞掉——那是真发生过的事，clone 下来跑 tests/cdp-canvas.mjs 会直接 import 失败。
+/lib/
+/dist/
+
+# 日志与测试产物
+*.log
+/tests/runs/
+
+# 参考先例：别的插件的源码，115MB，是设计期的读物、不是本项目源码
+/refs/
+
+# 本地状态：meow-memory 的记忆库与会话日志
+/.dsh-meow/
+
+# 用户要求：docs/ 先不进版本库（设计文档、审读记录、交付说明都只留在工作区）
+/docs/
+
+# 旧前端备份（前端重写时把原实现整体挪到这里，只作接口参考，不进库）
+/backup/
+
+# 图像生成插件往工作区落图的目录（生图草稿；选中的图另存到 assets/）
+/dsh-image-gen/
+
+# 网盘同步（123 云盘客户端）留下的 0 字节临时文件
+.l2s._tmp_*

@@ -1,0 +1,19 @@
+# 本机 patch 层：接入 OpenCode Go（Anthropic Messages 兼容）
+- id: llm-pi-ai
+  config:
+    providers:
+      opencode-go:
+        displayName: OpenCode Go
+        api: anthropic-messages
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        baseURL: https://opencode.ai/zen/go
+        defaultContextWindow: 1000000
+        defaultMaxTokens: 16384
+        models:
+          - id: deepseek-v4.1-flash
+            name: deepseek-v4.1-flash
+            contextWindow: 1000000
+- id: agent-default-model
+  config:
+    provider: opencode-go
+    model: deepseek-v4.1-flash

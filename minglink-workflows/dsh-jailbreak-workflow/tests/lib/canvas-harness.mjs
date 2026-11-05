@@ -1,0 +1,522 @@
+/**
+ * 画布真浏览器验收的**共用骨架**：进画布、真实拖放、真实键鼠。
+ *
+ * 与 `cdp-session.mjs` 的分工：那边只管"连上 Chrome、发命令、收事件"，
+ * 这边管"在 DSH 应用页里怎么走到画布、怎么用真指针/真键盘操作它"。
+ *
+ * **本文件只提供机制，不提供结论**：所有 `check()` 留在验收脚本里，
+ * 免得辅助函数自己吞掉失败、把红的说成绿的。
+ */
+
+import { mkdir, writeFile } from 'node:fs/promises'
+import { waitFor } from './cdp-session.mjs'
+import { authenticatedUrl } from './web-session.mjs'
+
+/* ── 走到画布 ─────────────────────────────────────────────── */
+
+const clickAriaExpr = (label) =>
+  `(() => {
+     const hit = [...document.querySelectorAll('button')]
+       .find((el) => el.getAttribute('aria-label') === ${JSON.stringify(label)});
+     if (!hit) return false;
+     hit.click();
+     return true;
+   })()`
+
+/** 会话列表在实例刚起来时要等，点一次没出现不代表没有——一律轮询。 */
+const clickSessionRowExpr = `(() => {
+   const timeish = /\\d+\\s*(分钟|小时|天|分|秒|月)/;
+   const all = [...document.querySelectorAll('a,button,li,div')];
+   const hit = all.find((el) => {
+     const t = (el.textContent || '').trim();
+     return t.length > 2 && t.length < 120 && timeish.test(t) && el.querySelectorAll('*').length < 40;
+   });
+   if (!hit) return null;
+   const text = (hit.textContent || '').trim().slice(0, 60);
+   hit.click();
+   return text;
+ })()`
+
+/**
+ * 点搜索结果里标题**恰好等于**某段文字的那一行。
+ *
+ * 两条讲究：
+ * - **只在标题那一块里比**。整行是「标题 + 工作区名 + 命中摘要」，行内 `span` 好几个；
+ *   拿整行做包含匹配（甚至拿行内任意 span 做相等匹配）都可能命中别条会话的工作区名或摘要。
+ * - **归档行不点**。DSH 的行点击走 `guardedOpen`，归档行只弹个提示、不导航；而搜索恰恰是
+ *   归档行冒头的地方。点了也白点，后面还会拿上一轮残留的会话当成功——所以这里直接报出来。
+ * @returns `{ status: 'clicked', title }` / `{ status: 'archived' }` / `null`（还没有）
+ */
+const clickSearchResultExpr = (title) =>
+  `(() => {
+     const titled = [...document.querySelectorAll('[role="treeitem"]')].filter((el) => {
+       const heading = el.firstElementChild;
+       if (heading === null) return false;
+       return [...heading.querySelectorAll('span')].some(
+         (s) => (s.textContent || '').trim() === ${JSON.stringify(title)});
+     });
+     if (titled.length === 0) return null;
+     const hit = titled.find((el) => !el.hasAttribute('aria-description'));
+     if (hit === undefined) return { status: 'archived' };
+     hit.click();
+     return { status: 'clicked', title: ${JSON.stringify(title)} };
+   })()`
+
+/**
+ * 进入一个会话（`conversation.view` 只在会话页上有槽位）。
+ *
+ * 两种判据。给了 `sessionTitle` 走**会话搜索**：工作区分组的展开状态记在浏览器里
+ * （`dsh.workspace.view.v5` 的 `groupExpansion`），而它按 origin 存——换个端口就是新 origin，
+ * 于是所有分组都是折叠的，会话行压根不在 DOM 里，点不到。搜索结果不受展开状态影响。
+ * 没给标题就退回按相对时间找第一条（刚建出来的会话显示「刚刚」，匹配不上，只在复用老会话时可靠）。
+ *
+ * 找不到一律**抛**，不返回 `null`：这个函数返回空值意味着后面必然卡在别的地方，
+ * 那种"这里静默、那里报错"的失败最难查。
+ * @param {object} session - CDP 会话
+ * @param {{ timeoutMs?: number, searchLabel?: string, searchPlaceholder?: string, sessionTitle?: string }} [options]
+ * @returns {Promise<string>} 点中的那一行的文字
+ */
+export async function enterSession(
+  session,
+  { timeoutMs = 30_000, searchLabel = '搜索会话', searchPlaceholder = '搜索会话名称', sessionTitle } = {},
+) {
+  const opened = await session.evaluate(clickAriaExpr(searchLabel))
+  if (opened !== true) throw new Error(`进不去会话列表：找不到 aria-label=${searchLabel} 的按钮`)
+  const deadline = Date.now() + timeoutMs
+
+  if (sessionTitle !== undefined) {
+    const typed = await session.evaluate(
+      setReactInputExpr(`input[placeholder="${searchPlaceholder}"]`, sessionTitle),
+    )
+    if (typed !== sessionTitle) throw new Error(`会话搜索框赋值失败：${JSON.stringify(typed)}`)
+    for (;;) {
+      const row = await session.evaluate(clickSearchResultExpr(sessionTitle))
+      if (row !== null) return row
+      if (Date.now() > deadline) {
+        throw new Error(`会话搜索结果里没有标题为 ${JSON.stringify(sessionTitle)} 的行`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  }
+
+  for (;;) {
+    const row = await session.evaluate(clickSessionRowExpr)
+    if (row !== null) return row
+    if (Date.now() > deadline) throw new Error('会话列表里没有带相对时间的会话行')
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+}
+
+/** 点一个 `data-testid` 命中的元素（`HTMLElement.click()`，不是真指针）。 */
+export const clickTestIdExpr = (testId) =>
+  `(() => {
+     const el = document.querySelector('[data-testid=' + JSON.stringify(${JSON.stringify(testId)}) + ']');
+     if (!(el instanceof HTMLElement)) return false;
+     el.click();
+     return true;
+   })()`
+
+/** 点标题**恰好等于**某段文字的按钮（包含匹配会先命中会话列表里的别的按钮）。 */
+export const clickTextExactExpr = (text) =>
+  `(() => {
+     const hit = [...document.querySelectorAll('button')]
+       .find((el) => (el.textContent || '').trim() === ${JSON.stringify(text)});
+     if (!hit) return false;
+     hit.click();
+     return true;
+   })()`
+
+/** 点开会话页上的「工作流」tab（`role=tab` 里文字恰好等于它的那个）。 */
+export async function openCanvasTab(session, { label = '工作流' } = {}) {
+  const tabs = await waitFor(
+    session,
+    `(() => { const t = [...document.querySelectorAll('[role="tab"]')].map((el) => (el.textContent || '').trim()); return t.length ? t : 0; })()`,
+    { timeoutMs: 20_000 },
+  )
+  const hit = await session.evaluate(`(() => {
+     const el = [...document.querySelectorAll('[role="tab"]')].find((node) => (node.textContent || '').trim() === ${JSON.stringify(label)});
+     if (!el) return false;
+     el.click();
+     return true;
+   })()`)
+  if (hit !== true) throw new Error(`找不到「${label}」tab，实得 ${JSON.stringify(tabs)}`)
+  return tabs
+}
+
+/**
+ * 显式打开某个工作流，并等到画布真的把它渲染出来（或确认它是空的）。
+ *
+ * 走的是用户那条路：点顶栏的工作流名 → 在下拉里点那一行。判据是**页面自己认了它**：
+ * 顶栏上出现这个名字，且画布上要么有步骤、要么是空态。
+ */
+export async function selectGraph(session, name, { timeoutMs = 25_000 } = {}) {
+  await waitFor(session, `document.querySelector('[data-testid="wl-switcher"]') !== null`, {
+    timeoutMs,
+  })
+  const optionSel = `[data-testid="wl-wf-item"][data-value=${JSON.stringify(name)}]`
+  const already = await session.evaluate(
+    `(document.querySelector('[data-testid="wl-switcher"]')?.textContent || '').trim() === ${JSON.stringify(name)}`,
+  )
+  if (already !== true) {
+    await session.evaluate(`document.querySelector('[data-testid="wl-switcher"]').click()`)
+    // 列表是打开下拉时现拉的：等这一行出现。
+    await waitFor(session, `document.querySelector(${JSON.stringify(optionSel)}) !== null`, {
+      timeoutMs,
+    })
+    await session.evaluate(`document.querySelector(${JSON.stringify(optionSel)}).click()`)
+  }
+  return waitFor(
+    session,
+    `(() => {
+       const trigger = document.querySelector('[data-testid="wl-switcher"]');
+       if (trigger === null || (trigger.textContent || '').trim() !== ${JSON.stringify(name)}) return 0;
+       if (document.querySelector('[data-testid="wl-empty"]') !== null) return 1;
+       return document.querySelectorAll('.react-flow__node').length || 0;
+     })()`,
+    { timeoutMs },
+  )
+}
+
+/* ── 画布状态读取 ─────────────────────────────────────────── */
+
+/**
+ * 画布上的节点：id、**flow 坐标**、选中态。
+ *
+ * React Flow 12 给每个节点写的 `transform: translate(Xpx, Ypx)` 里 X/Y 就是
+ * **flow 坐标**（视口的平移缩放由外层 `.react-flow__viewport` 承担），
+ * 所以这里读到的数字可以直接和落点比较，不需要再从屏幕坐标反算。
+ */
+export const nodeListExpr = `(() => {
+   return [...document.querySelectorAll('.react-flow__node')].map((el) => {
+     const match = /translate\\(([-0-9.]+)px,\\s*([-0-9.]+)px\\)/.exec(el.style.transform || '');
+     return {
+       id: el.getAttribute('data-id'),
+       x: match ? Number(match[1]) : null,
+       y: match ? Number(match[2]) : null,
+       selected: el.classList.contains('selected'),
+     };
+   });
+ })()`
+
+export const nodeCountExpr = `document.querySelectorAll('.react-flow__node').length`
+
+/** 某个元素（`data-testid`）的视口矩形；找不到给 `null`。 */
+export const rectOfTestIdExpr = (testId) =>
+  `(() => {
+     const el = document.querySelector('[data-testid=' + JSON.stringify(${JSON.stringify(testId)}) + ']');
+     if (!el) return null;
+     const r = el.getBoundingClientRect();
+     return { x: r.left, y: r.top, w: r.width, h: r.height };
+   })()`
+
+/** 把元素滚进视野再取中心点（节点库那一栏可能滚过）。 */
+export async function centerOf(session, selector) {
+  const box = await session.evaluate(`(() => {
+     const el = document.querySelector(${JSON.stringify(selector)});
+     if (!el) return null;
+     // 'nearest'：已经看得见就一动不动。'center' 会把宿主页面里 overflow:hidden 的外层容器
+     // 也横向滚过去（整页错位，之后算出来的坐标全部落空）。
+     el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+     const r = el.getBoundingClientRect();
+     return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
+   })()`)
+  if (box === null) throw new Error(`找不到元素：${selector}`)
+  if (box.w === 0 || box.h === 0) throw new Error(`元素没有尺寸：${selector}`)
+  return { x: Math.round(box.x), y: Math.round(box.y) }
+}
+
+/** 受控输入框赋值（原生 setter + `input` 事件，React 才认）。 */
+export const setReactInputExpr = (selector, value) =>
+  `(() => {
+     const el = document.querySelector(${JSON.stringify(selector)});
+     if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return false;
+     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+     const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+     setter.call(el, ${JSON.stringify(value)});
+     el.dispatchEvent(new Event('input', { bubbles: true }));
+     return el.value;
+   })()`
+
+export async function setReactInput(session, selector, value) {
+  const now = await session.evaluate(setReactInputExpr(selector, value))
+  if (now !== value) throw new Error(`输入框赋值失败：${selector} → ${JSON.stringify(now)}`)
+  return now
+}
+
+/* ── 真指针 / 真键盘 ──────────────────────────────────────── */
+
+/** 真指针点击（按下 + 松开），比 `el.click()` 更接近用户。 */
+export async function mouseClick(session, point, { button = 'left' } = {}) {
+  const buttons = button === 'left' ? 1 : 2
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.x,
+    y: point.y,
+    button: 'none',
+    buttons: 0,
+  })
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button,
+    buttons,
+    clickCount: 1,
+  })
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: point.x,
+    y: point.y,
+    button,
+    buttons: 0,
+    clickCount: 1,
+  })
+}
+
+/** 把指针移到某点（触发 `:hover` 与 React Flow 的悬停逻辑）。 */
+export async function mouseMove(session, point) {
+  await session.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: point.x,
+    y: point.y,
+    button: 'none',
+    buttons: 0,
+  })
+}
+
+/**
+ * 真实 HTML5 拖放：按住拖源 → 让 Chrome 把 `dragstart` 的 `DragData` 交出来 →
+ * 用同一份 `DragData` 向目标派发 `dragEnter` / `dragOver` / (`drop`)。
+ *
+ * 关键点：`setInterceptDrags(true)` 之后**页面自己的 `dragstart` 真的跑过**
+ * （`dataTransfer` 里的自定义 MIME 是产品写进去的），我们只是把浏览器接下来
+ * 该做的投递动作显式做出来。所以这条通路验的是产品，不是脚本。
+ *
+ * @param session - `openPage()` 的会话。
+ * @param options - `{ itemTestId, to, steps, onDragOver, drop }`。
+ * @returns 页面写进 `dataTransfer` 的 DragData（可断言 MIME 与内容）。
+ */
+export async function dragItemTo(
+  session,
+  { itemTestId, to, steps = 3, onDragOver, drop = true, holdMs = 120 },
+) {
+  const selector = `[data-testid="${itemTestId}"]`
+  const from = await centerOf(session, selector)
+  const fromLabel = await session.evaluate(
+    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? (el.textContent || '').trim().slice(0, 40) : null })()`,
+  )
+  await session.send('Input.setInterceptDrags', { enabled: true })
+  try {
+    const intercepted = session.once('Input.dragIntercepted', { timeoutMs: 6_000 })
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: from.x,
+      y: from.y,
+      button: 'left',
+      buttons: 1,
+      clickCount: 1,
+    })
+    // 分几步挪过去：一步就跳到远处的话，某些实现根本不会认定为拖拽。
+    for (let step = 1; step <= steps; step += 1) {
+      await session.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: Math.round(from.x + ((to.x - from.x) * step) / steps),
+        y: Math.round(from.y + ((to.y - from.y) * step) / steps),
+        button: 'left',
+        buttons: 1,
+      })
+    }
+    const event = await intercepted
+    const data = event?.data ?? null
+    if (data === null) throw new Error('没有收到 Input.dragIntercepted：页面的 dragstart 没跑')
+    const modifiers = data.dragOperationsMask ?? 1
+    const dispatch = (type) =>
+      session.send('Input.dispatchDragEvent', { type, x: to.x, y: to.y, data, modifiers })
+    await dispatch('dragEnter')
+    await dispatch('dragOver')
+    if (onDragOver !== undefined) await onDragOver()
+    if (drop) await dispatch('drop')
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: to.x,
+      y: to.y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    })
+    await new Promise((resolve) => setTimeout(resolve, holdMs))
+    return { data, from, fromLabel }
+  } finally {
+    await session.send('Input.setInterceptDrags', { enabled: false })
+  }
+}
+
+/** CDP 的修饰键位：Alt=1、Ctrl=2、Meta=4、Shift=8。 */
+export const MOD = { alt: 1, ctrl: 2, meta: 4, shift: 8 }
+
+const VK = {
+  z: 90,
+  ArrowDown: 40,
+  ArrowUp: 38,
+  y: 89,
+  Escape: 27,
+  Enter: 13,
+  Slash: 191,
+  Delete: 46,
+}
+
+/**
+ * 真键盘：一条 `keyDown` + 一条 `keyUp`。
+ *
+ * 合成 `KeyboardEvent` 不行——`event.isTrusted` 是 false，而且修饰键状态得自己糊。
+ * 走 CDP 的 `Input.dispatchKeyEvent`，页面收到的是**真的**按键。
+ */
+export async function pressKey(session, key, { modifiers = 0, code, text } = {}) {
+  const keyCode = VK[key] ?? key.toUpperCase().charCodeAt(0)
+  const params = {
+    key,
+    code: code ?? (key.length === 1 ? `Key${key.toUpperCase()}` : key),
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+    modifiers,
+  }
+  await session.send('Input.dispatchKeyEvent', {
+    type: text === undefined ? 'rawKeyDown' : 'keyDown',
+    ...params,
+    ...(text === undefined ? {} : { text }),
+  })
+  await session.send('Input.dispatchKeyEvent', { type: 'keyUp', ...params })
+}
+
+/** `Ctrl+Z` / `Ctrl+Shift+Z` 这类组合键。 */
+export async function pressShortcut(session, key, mods = ['ctrl']) {
+  let modifiers = 0
+  for (const mod of mods) modifiers |= MOD[mod]
+  await pressKey(session, key, { modifiers, text: undefined })
+}
+
+/* ── 工作流中心 ───────────────────────────────────────────── */
+
+/** 「运行实例」页左栏里某个工作区那一项（表达式；找不到是 undefined）。 */
+export const hubWorkspaceExpr = (workspacePath) =>
+  `[...document.querySelectorAll('[data-testid="wl-hub-ws"]')].find((item) => item.dataset.path === ${JSON.stringify(workspacePath)})`
+
+/**
+ * 「运行实例」页里让某个实例的行露出来：右栏只列选中的那个工作区，在左栏点它。
+ * 调用前工作流中心要开着、停在「运行实例」页。
+ */
+export async function revealHubRow(session, instanceId, workspacePath) {
+  const item = hubWorkspaceExpr(workspacePath)
+  await waitFor(session, `(${item}) != null`)
+  // 已经选中也点一下：点过就钉住，不怕会话列表晚到、默认选中换到别的工作区。
+  await session.evaluate(`(${item}).click()`)
+  await waitFor(
+    session,
+    `document.querySelector('[data-testid="wl-hub-row"][data-id="${instanceId}"]') !== null`,
+  )
+}
+
+/* ── 截图 ─────────────────────────────────────────────────── */
+
+/**
+ * 等页面上的动画走完再截图。
+ *
+ * 右栏（`.inspector`）、步骤库这类浮层进场时是 `translateX + opacity` 的动画（`shell.module.css`
+ * 的 `slideIn` / `panelFade`，460ms/180ms）。选中项刚变、面板刚打开就截图，会拍到半透明、
+ * 还在滑的那一帧——画面上看像「面板发灰、右边被裁」，其实是拍早了。
+ *
+ * **只等「会自己放完」的那几条**，下面几种一律跳过：
+ * - 已经不在跑的（`playState !== 'running'`）——放完了就不等；
+ * - 无限循环的（`iterations === Infinity`，呼吸的光环、转圈的图标）——永远停不下来；
+ * - **滚动驱动的**（`animation-timeline: scroll` 的 `ScrollTimeline` / `ViewTimeline`，
+ *   见 `ui.module.css` 的 `.scrollFade`）：`playState` 恒为 `running`、`currentTime` 是 `null`，
+ *   它跟着滚动走、没有「放完」这一说。不跳过的话每次截图都会等满超时；
+ * - 没有结束时间的（`effect` 缺失或 `endTime` 不是有限数，如 CSS 变量驱动的 `Animation`）。
+ *
+ * 超时**不再静默**：等满 `timeoutMs` 仍有动画在跑就 `console.warn` 打出它们的名字再照拍——
+ * 那说明页面上出现了一条比 `timeoutMs` 还长的进场动画，截图可能是半截的，跑验收的人要看得见。
+ *
+ * @param session - CDP 页面会话。
+ * @param options - `timeoutMs` 最多等多久；`quiet` 为真时超时不打警告（默认打）。
+ */
+export async function settleAnimations(session, { timeoutMs = 1_500, quiet = false } = {}) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    let pending = []
+    try {
+      pending = await session.evaluate(`(() => {
+        const scrollTimeline = typeof ScrollTimeline === 'undefined' ? null : ScrollTimeline;
+        return document.getAnimations()
+          .filter((item) => {
+            if (item.playState !== 'running') return false;
+            const timing = item.effect?.getComputedTiming?.() ?? {};
+            if (timing.iterations === Infinity) return false;
+            const timeline = item.timeline ?? null;
+            // 滚动驱动：跟着滚动走，没有「放完」这一帧。
+            if (scrollTimeline !== null && timeline instanceof scrollTimeline) return false;
+            if (timeline !== null && typeof timeline.currentTime !== 'number') return false;
+            // 没有结束时间的（缺失 effect、无限时长）同样等不到头。
+            if (typeof timing.endTime !== 'number' || !Number.isFinite(timing.endTime)) return false;
+            return true;
+          })
+          .map((item) => item.animationName ?? item.constructor?.name ?? 'animation');
+      })()`)
+    } catch (error) {
+      // 查不出来（页面不在、求值报错）不当成「没有动画」：同样要说一声再照拍。
+      if (!quiet) {
+        console.warn(`[settleAnimations] 查不到动画状态，照拍：${error.message}`)
+      }
+      return
+    }
+    if (pending.length === 0) return
+    if (Date.now() >= deadline) {
+      if (!quiet) {
+        console.warn(
+          `[settleAnimations] ${timeoutMs}ms 后仍有动画在跑，照拍（截图可能是半截的）：${pending.join(', ')}`,
+        )
+      }
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
+/** 截图落到 `tests/runs/<name>`（`runs/` 被 vitest 排除）。截前先等动画停（见 {@link settleAnimations}）。 */
+export async function screenshot(session, name) {
+  await settleAnimations(session)
+  const shot = await session.send('Page.captureScreenshot', { format: 'png' })
+  const target = new URL(`../runs/${name}`, import.meta.url)
+  await mkdir(new URL('../runs/', import.meta.url), { recursive: true })
+  await writeFile(target, Buffer.from(shot.data, 'base64'))
+  return target
+}
+
+/**
+ * 从零走到画布：设视口 → 导航 → 等客户端半加载 → 进会话 → 开「工作流」tab → 显式选图。
+ *
+ * **不依赖"自动打开上次那张图"**：A16 的自动打开是产品行为，验收要能独立于它成立，
+ * 所以每次都用图选择器显式选图。
+ */
+export async function bootToCanvas(
+  session,
+  graphName,
+  { width = 1440, height = 900, lang = 'zh', sessionTitle } = {},
+) {
+  await session.send('Emulation.setDeviceMetricsOverride', {
+    width,
+    height,
+    deviceScaleFactor: 1,
+    mobile: false,
+  })
+  await session.navigate(authenticatedUrl())
+  const probe = await waitFor(session, 'globalThis.__WORKFLOW_LITE__ ?? ""', { timeoutMs: 30_000 })
+  if (probe !== 'workflow-lite') throw new Error(`e2e 探针应为 workflow-lite，实得 ${JSON.stringify(probe)}`)
+  // `lang`：DSH 界面是哪种语言（英文界面下按钮、标签页的文字不同）。
+  const row = await enterSession(session, {
+    ...(lang === 'en' ? { searchLabel: 'Search sessions', searchPlaceholder: 'Search session names' } : {}),
+    ...(sessionTitle === undefined ? {} : { sessionTitle }),
+  })
+  await openCanvasTab(session, lang === 'en' ? { label: 'Workflow' } : {})
+  const rendered = await selectGraph(session, graphName)
+  return { row, rendered }
+}

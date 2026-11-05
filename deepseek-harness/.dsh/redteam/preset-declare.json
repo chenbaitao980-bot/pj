@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "phase": "registered",
+  "skillsDir": "E:\\claude\\project4\\pj\\deepseek-harness\\.dsh\\redteam\\skills",
+  "presetDir": "E:\\claude\\project4\\pj\\deepseek-harness\\.dsh\\.agent-presets\\redteam",
+  "at": "2026-11-05T01:53:33.119Z",
+  "tries": 1,
+  "id": "redteam",
+  "name": "红队模式",
+  "plugins": 19,
+  "broken": null
+}

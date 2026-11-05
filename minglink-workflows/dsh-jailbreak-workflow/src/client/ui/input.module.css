@@ -1,0 +1,198 @@
+/**
+ * dsh-workflow-lite — 输入节点的属性面板。
+ */
+
+.headIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: calc(8px * var(--wl-round, 1));
+}
+
+.question {
+  min-height: 58px;
+  font-size: var(--wl-fs-body);
+  font-weight: 500;
+  resize: vertical;
+}
+
+.defaultArea,
+.hint {
+  min-height: 56px;
+  resize: vertical;
+}
+
+/* ── 选项 ─────────────────────────────────────────────────── */
+
+.options {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.option {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.optionInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+}
+
+.remove {
+  flex: none;
+  color: var(--wl-text-3);
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+
+.option:hover .remove,
+.remove:focus-visible {
+  opacity: 1;
+}
+
+.option[data-duplicate="true"] .optionInput {
+  border-color: var(--wl-danger);
+}
+
+.add {
+  align-self: flex-start;
+}
+
+/* 开了「允许自己填写」：选项列表末尾一行灰色的「其他」，对应执行前填写里的那一行。 */
+.otherGhost {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+}
+
+.otherMark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px dashed var(--wl-line-strong);
+  border-radius: 50%;
+}
+
+/* ── 必填开关 ─────────────────────────────────────────────── */
+
+/* 几个开关归成一组：组内贴近，和上下的区块之间仍是面板的大间距。 */
+.switches {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.required {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--wl-line);
+  border-radius: var(--wl-r-control);
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.required:hover {
+  background: var(--wl-hover);
+}
+
+.required:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+.requiredText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.requiredTitle {
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+}
+
+.requiredDesc {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.requiredChip {
+  flex: none;
+  padding: 0 6px;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 18px;
+}
+
+/* ── 只给填写的人看的：占位与说明 ────────────────────────── */
+
+.private {
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+}
+
+.privateNote {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.5;
+}
+
+.private .privateNote svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.sub {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.subLabel {
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remove {
+    transition: none;
+  }
+}
+
+/* 灰底小区块里的输入框：用面板色托起来，看得出框。 */
+.private .sub > input,
+.private .sub > textarea {
+  background: var(--wl-panel);
+}
+
+/* 瑞士：成块的卡片行只留底线。 */
+:global([data-look="swiss"]) .required {
+  border-width: 0 0 1px;
+  border-color: var(--wl-line-strong);
+}

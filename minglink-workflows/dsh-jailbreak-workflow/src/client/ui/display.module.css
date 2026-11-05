@@ -1,0 +1,2967 @@
+/*
+ * 画布展示卡（资源卡开了「在画布上展示」）：上面一行标题，下面一块展示区。
+ * 外框、折角、选中环沿用资源卡（canvas.module.css 的 .resCard），这里只改版式：
+ * 宽度跟着展示区走，标题行 38（含底下一道分隔线，和 model/display.ts 的 DISPLAY_HEAD 一致）。
+ * 展示区和卡面是同一块：不另描边、不另垫底（看板的底色也是卡面色），只在标题行下面分一道线。
+ * 卡里有网页框：悬停、拖动都不抬起、不放大（变换会让框里的页面重新栅格化，一拖就糊、就卡）。
+ */
+
+.card[data-display] {
+  flex-direction: column;
+  width: auto;
+  min-height: 0;
+}
+
+.card[data-display]:hover,
+:global(.react-flow__node.dragging) .card[data-display] {
+  transform: none;
+}
+
+/* 拖柄、改尺寸时的读数要露在卡外：卡本身不裁。 */
+.card[data-display][data-interactive] {
+  cursor: default;
+}
+
+.head {
+  display: flex;
+  flex: none;
+  gap: 7px;
+  align-items: center;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 0 22px 0 12px;
+  /*
+   * 分隔线比外框淡一档：画布缩放后外框常正好落在整像素上、是一道实线，这道线落在两行像素之间、被抹成两行，
+   * 用同一个颜色就显得比外框粗、比外框亮。
+   */
+  border-bottom: 1px solid color-mix(in oklab, var(--wl-file-border) 60%, var(--wl-file-surface));
+}
+
+.tab {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 26px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: var(--wl-file-tab);
+  color: var(--wl-file);
+  font-family: var(--wl-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.tab[data-kind="text"] {
+  color: var(--wl-c-slate);
+}
+
+.tab[data-tinted="true"] {
+  background: color-mix(in oklab, var(--wl-tint) 16%, var(--wl-file-tab));
+  color: var(--wl-tint);
+}
+
+/* 标题和紧跟其后的状态（生成中、刚更新、筛出几行）占住标题行剩下的地方；标题太长时标题省略，状态不让。 */
+.titleLine {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.statusSlot {
+  display: flex;
+  flex: none;
+}
+
+.statusSlot:empty {
+  display: none;
+}
+
+.title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wl-text);
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 交互、打开：悬停或选中时淡入，平时不占眼。 */
+.actions {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 140ms linear;
+}
+
+:global(.react-flow__node.selected) .actions,
+.card[data-display]:hover .actions,
+.card[data-display][data-interactive] .actions,
+.card[data-display][data-settings] .actions {
+  opacity: 1;
+}
+
+.action {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-3);
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--wl-hover);
+  color: var(--wl-text);
+}
+
+.action[aria-pressed="true"] {
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+/* ── 展示区 ── */
+
+.window {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  /* 卡的圆角 7、边框 1：里面这块的下边两角是 6。 */
+  border-radius: 0 0 calc(6px * var(--wl-round, 1)) calc(6px * var(--wl-round, 1));
+}
+
+/* 进了交互：展示区内沿描一圈强调色，告诉人「现在鼠标在里面」。 */
+.card[data-interactive] .window::after {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--wl-accent);
+  content: "";
+  pointer-events: none;
+}
+
+/*
+ * ── 展示卡在画布上的样子（外观设置里的默认、卡片自己的「外观」，见 app/displayLook.ts） ──
+ * 卡片还是那么大（连线、排版都不变），换的只是卡面：
+ * - 柔边镂空（clear）、纯镂空（bare）：不画外框和卡面；标题行留着位置，标签、分隔线不画，标题压淡、贴着内容；
+ *   选中环（::after）改成离内容 6px 的一圈虚线，悬停时同一圈淡色。
+ *   柔边再把折角那层（::before）改成垫底：一层画布底色、四边各渐隐 18px，画布的点在内容下面淡出去；纯镂空不垫。
+ * - 毛玻璃（glass）：半透明卡面、四角圆、后面的画布模糊着透出来；视口在动时（data-moving）换成同色的实底，
+ *   只有点的画布模糊了也就是一层底色，换的那一下看不出来。
+ */
+.card[data-display]:is([data-board-look="clear"], [data-board-look="bare"]) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.card[data-display][data-board-look="clear"]::before {
+  inset: -14px;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: var(--wl-canvas);
+  box-shadow: none;
+  mask-image:
+    linear-gradient(to right, transparent, #000 18px, #000 calc(100% - 18px), transparent),
+    linear-gradient(to bottom, transparent, #000 18px, #000 calc(100% - 18px), transparent);
+  mask-composite: intersect;
+  pointer-events: none;
+}
+
+.card[data-display]:is([data-board-look="bare"], [data-board-look="glass"])::before {
+  content: none;
+}
+
+.card[data-display]:is([data-board-look="clear"], [data-board-look="bare"])::after {
+  inset: -6px;
+  border: 1.5px dashed var(--wl-line-strong);
+  border-radius: calc(10px * var(--wl-round, 1));
+  box-shadow: none;
+}
+
+.card[data-display]:is([data-board-look="clear"], [data-board-look="bare"]):hover::after {
+  opacity: 1;
+}
+
+.card[data-display]:is(
+  [data-board-look="clear"],
+  [data-board-look="bare"]
+)[data-focused="true"]::after {
+  border-color: var(--wl-file);
+  opacity: 1;
+}
+
+:global(.react-flow__node.selected)
+  .card[data-display]:is([data-board-look="clear"], [data-board-look="bare"])::after {
+  border-color: var(--wl-accent);
+  opacity: 1;
+}
+
+/*
+ * 标题行在垫底那层上面（垫底是定位的，不定位的会被它盖住）。
+ * 看板四周留 12px：按钮 22 宽、图标 14，右边留 8 正好让图标和看板内容的右缘对齐（毛玻璃同理）。
+ */
+.card:is([data-board-look="clear"], [data-board-look="bare"]) .head {
+  position: relative;
+  align-items: flex-end;
+  padding-right: 8px;
+  padding-bottom: 6px;
+  border-bottom-color: transparent;
+}
+
+.card:is([data-board-look="clear"], [data-board-look="bare"]) .tab {
+  display: none;
+}
+
+.card:is([data-board-look="clear"], [data-board-look="bare"]) .title {
+  color: var(--wl-text-3);
+}
+
+.card[data-display][data-board-look="glass"] {
+  border-color: color-mix(in oklab, var(--wl-line-strong) 70%, transparent);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: color-mix(in oklab, var(--wl-file-surface) 55%, transparent);
+  box-shadow: var(--wl-shadow-2);
+  backdrop-filter: blur(10px);
+}
+
+.card[data-display][data-board-look="glass"][data-moving] {
+  background: color-mix(in oklab, var(--wl-file-surface) 55%, var(--wl-canvas));
+  backdrop-filter: none;
+}
+
+.card[data-board-look="glass"] .head {
+  padding-right: 8px;
+  border-bottom-color: color-mix(in oklab, var(--wl-line) 70%, transparent);
+}
+
+.card[data-board-look="glass"] .tab {
+  background: color-mix(in oklab, var(--wl-file-tab) 60%, transparent);
+}
+
+.card[data-board-look="glass"] .window {
+  border-radius: 0 0 calc(9px * var(--wl-round, 1)) calc(9px * var(--wl-round, 1));
+}
+
+/*
+ * 「隐藏标题」：不选中、不悬停、没开着细项时标题淡出——位置留着，卡片不变高，指针下的东西不挪；告警标记照常显示。
+ * 毛玻璃的分隔线跟着淡掉。卡片外观的卡框改成只包住展示区（见下面），标题和镂空一样悬在上面。
+ * 动效例外（登记）：分隔线、卡框的颜色过渡，只在悬停进出、选中时变一次，视口动时不变。
+ */
+.card[data-hide-title] :is(.title, .tab) {
+  transition: opacity 140ms linear;
+}
+
+.card[data-hide-title] .head {
+  transition: border-bottom-color 140ms linear;
+}
+
+/*
+ * 卡片外观 +「隐藏标题」：卡框画在展示区上（一圈 box-shadow 当边，不占位置；卡面底色；折角、选中环往下挪到展示区顶上），
+ * 标题行变透明、标题压淡贴着内容，和镂空一样。卡片占的位置、连线都不变，只是标题那一条不再是卡的一部分。
+ */
+.card[data-display][data-hide-title]:not([data-board-look]) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.card[data-display][data-hide-title]:not([data-board-look])::before,
+.card[data-display][data-hide-title]:not([data-board-look])::after {
+  top: 37px;
+}
+
+/* 折角压在展示区上面（展示区是定位的，排在后面会盖住它）。 */
+.card[data-display][data-hide-title]:not([data-board-look])::before {
+  z-index: 1;
+}
+
+.card[data-hide-title]:not([data-board-look]) .head {
+  align-items: flex-end;
+  padding-right: 8px;
+  padding-bottom: 6px;
+  border-bottom-color: transparent;
+}
+
+.card[data-hide-title]:not([data-board-look]) .title {
+  color: var(--wl-text-3);
+}
+
+.card[data-hide-title]:not([data-board-look]) .window {
+  border-radius: calc(7px * var(--wl-round, 1)) 0 calc(6px * var(--wl-round, 1))
+    calc(6px * var(--wl-round, 1));
+  background: var(--wl-file-surface);
+  box-shadow: 0 0 0 1px var(--wl-file-border);
+  transition: box-shadow 120ms linear;
+}
+
+.card[data-hide-title]:not([data-board-look]):hover .window {
+  box-shadow: 0 0 0 1px var(--wl-line-strong);
+}
+
+.card[data-hide-title]:not([data-board-look])[data-focused="true"] .window {
+  box-shadow: 0 0 0 1px var(--wl-file);
+}
+
+/* 平时（不选中、不悬停）：标题淡出、分隔线去掉。放在各外观的写法后面，压得住它们。 */
+:global(.react-flow__node:not(.selected))
+  .card[data-hide-title]:not(
+    :hover,
+    [data-focused="true"],
+    [data-settings],
+    [data-interactive],
+    [data-resizing]
+  )
+  :is(.title, .tab) {
+  opacity: 0;
+}
+
+:global(.react-flow__node:not(.selected))
+  .card[data-hide-title]:not(
+    :hover,
+    [data-focused="true"],
+    [data-settings],
+    [data-interactive],
+    [data-resizing]
+  )
+  .head {
+  border-bottom-color: transparent;
+}
+
+.body {
+  position: relative;
+  overflow: hidden;
+}
+
+/* 平时整块不接鼠标：拖卡、平移、双击都落在外面那层上。 */
+.body:not([data-interactive]) {
+  pointer-events: none;
+}
+
+.body[data-interactive] {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.fresh {
+  width: 100%;
+  height: 100%;
+  animation: freshIn 220ms var(--wl-ease-out);
+}
+
+@keyframes freshIn {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 读取中：一块浅底，上面一道光慢慢扫过。 */
+.loading {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--wl-fill);
+}
+
+.loading::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    light-dark(rgb(255 255 255 / 55%), rgb(255 255 255 / 6%)) 50%,
+    transparent 70%
+  );
+  content: "";
+  animation: sweep 1.4s var(--wl-ease) infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* 占位 / 读不了：铺一层浅底，中间一枚图标、一两行字。 */
+.state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 8px 12px;
+  background: color-mix(in oklab, var(--wl-fill) 55%, transparent);
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  text-align: center;
+}
+
+.stateIcon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 2px;
+  border-radius: 50%;
+  background: var(--wl-panel);
+  color: var(--wl-text-3);
+}
+
+.state[data-tone="error"] .stateIcon {
+  background: var(--wl-warn-soft);
+  color: var(--wl-warn);
+}
+
+.stateTitle {
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+}
+
+.stateSub {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--wl-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 写它的步骤正在跑：图标换成强调色。 */
+.state[data-busy] .stateIcon {
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+/* ── 草图：还没有内容时按种类画的线框（见 DisplaySketch），颜色压低，一眼看得出不是真内容 ── */
+
+.sketch {
+  --sk-line: color-mix(in oklab, var(--wl-text-3) 18%, transparent);
+  --sk-soft: color-mix(in oklab, var(--wl-text-3) 6%, transparent);
+  --sk-tint: color-mix(in oklab, var(--wl-accent) 34%, transparent);
+
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  container-type: size;
+}
+
+.sketch[data-kind="image"] {
+  --sk-tint: color-mix(in oklab, var(--wl-ok) 42%, transparent);
+}
+
+.sketch[data-kind="gallery"] {
+  --sk-tint: color-mix(in oklab, var(--wl-ok) 42%, transparent);
+}
+
+.sketch[data-kind="text"] {
+  --sk-tint: color-mix(in oklab, var(--wl-text-3) 34%, transparent);
+}
+
+.skBody {
+  position: absolute;
+  inset: 14px 16px 42px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.skBar {
+  display: block;
+  flex: none;
+  height: 6px;
+  border-radius: calc(3px * var(--wl-round, 1));
+  background: var(--sk-line);
+}
+
+.skBar[data-tone="tint"] {
+  background: var(--sk-tint);
+}
+
+.skHead {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.skHead .skBar {
+  height: 9px;
+}
+
+.skDots {
+  display: flex;
+  gap: 4px;
+}
+
+.skDots span {
+  width: 14px;
+  height: 6px;
+  border-radius: calc(3px * var(--wl-round, 1));
+  background: var(--sk-line);
+}
+
+.skTiles {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+.skTile,
+.skChart,
+.skTable {
+  border: 1px solid var(--sk-line);
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: var(--sk-soft);
+}
+
+.skTile {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.skTile .skBar[data-tone="tint"] {
+  height: 10px;
+}
+
+.skChart {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+}
+
+.skChart svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.skChart polyline {
+  fill: none;
+  stroke: var(--sk-tint);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.skImage {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+}
+
+.skImage svg {
+  width: min(36%, 120px);
+  height: auto;
+}
+
+.skGallery {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.skCell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--sk-line);
+  border-radius: calc(4px * var(--wl-round, 1));
+  background: var(--sk-soft);
+}
+
+.skCell svg {
+  width: min(46%, 72px);
+  height: auto;
+}
+
+.skCell circle {
+  fill: var(--sk-tint);
+}
+
+.skCell path {
+  fill: var(--sk-line);
+}
+
+.skImage circle {
+  fill: var(--sk-tint);
+}
+
+.skImage path {
+  fill: var(--sk-line);
+}
+
+.skRatio {
+  color: var(--wl-text-3);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.skTable {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.skRow {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+  padding: 6px 8px;
+}
+
+.skRow + .skRow {
+  border-top: 1px solid var(--sk-line);
+}
+
+.skLine {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+}
+
+.skNo {
+  flex: none;
+  width: 14px;
+  color: color-mix(in oklab, var(--wl-text-3) 60%, transparent);
+  font-family: var(--wl-mono);
+  font-size: 9px;
+  line-height: 1;
+  text-align: right;
+}
+
+/* 说明签：钉在底边正中。 */
+.skCaption {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: calc(100% - 20px);
+  padding: 3px 10px;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: var(--wl-panel);
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+  white-space: nowrap;
+  transform: translateX(-50%);
+}
+
+.skCaptionTitle {
+  flex: none;
+  font-weight: 600;
+}
+
+.skCaptionSub {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-family: var(--wl-mono);
+  text-overflow: ellipsis;
+}
+
+.sketch[data-busy] .skCaption {
+  border-color: var(--wl-accent);
+  color: var(--wl-accent-text);
+}
+
+/* 卡片矮、窄时收掉放不下的部分。 */
+@container (height < 150px) {
+  .skTiles,
+  .skTable {
+    display: none;
+  }
+}
+
+@container (height < 110px) {
+  .skChart,
+  .skImage svg {
+    display: none;
+  }
+}
+
+@container (width < 240px) {
+  .skCaptionSub,
+  .skTile:nth-child(3) {
+    display: none;
+  }
+}
+
+/* ── 图片：透明处垫棋盘格 ── */
+
+.imageStage {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--wl-panel);
+  background-image:
+    linear-gradient(45deg, var(--wl-fill) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--wl-fill) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--wl-fill) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--wl-fill) 75%);
+  background-position:
+    0 0,
+    0 6px,
+    6px -6px,
+    -6px 0;
+  background-size: 12px 12px;
+}
+
+/* 不是卡片的样子：不垫棋盘格，图片直接放在画布（垫底、毛玻璃）上，透明处透出来。 */
+.card[data-board-look] .imageStage {
+  background: none;
+}
+
+.image {
+  display: block;
+  user-select: none;
+}
+
+/*
+ * 适应、填满：格子的行列定死成展示区那么大，图片的 100% 才有得量。
+ * 行高跟着内容走的话，百分比高度量不出来、按图片比例撑开：比展示区「高」的图（方图放进扁框）下面一截被裁掉。
+ */
+.imageStage:is([data-fit="contain"], [data-fit="cover"]) {
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.imageStage[data-fit="contain"] .image,
+.imageStage[data-fit="cover"] .image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.imageStage[data-fit="cover"] .image {
+  object-fit: cover;
+}
+
+.imageStage[data-fit="actual"] .image {
+  flex: none;
+  max-width: none;
+  max-height: none;
+}
+
+/* 适应：位图最大放到原大（小图标、小截图放大了只是一团马赛克），比展示区大才缩；矢量图照样放满。 */
+.imageStage[data-fit="contain"]:not([data-vector]) .image {
+  object-fit: scale-down;
+}
+
+/* ── 网页：按放大后的宽排版，再整页缩进来 ── */
+
+/*
+ * 框的底色 = 卡面：框是整页缩放的，画布缩小时边落在半像素上，边上一圈像素会混进框的底色；
+ * 底色是白的话，左右下沿和标题行下面就多出一道亮线，像又描了一圈边。
+ */
+.frame {
+  display: block;
+  border: 0;
+  background: var(--wl-file-surface);
+  transform-origin: 0 0;
+}
+
+/* 不是卡片的样子、页面是看板（透明的）：框也透明，透出后面（垫底、画布、毛玻璃）。别的网页留着卡面底色。 */
+.card[data-board-look] .frame[data-clear] {
+  background: transparent;
+}
+
+/* ── Markdown / 纯文本：超出展示区的部分在底边淡出（交互时能滚，不淡）── */
+
+/*
+ * 裁的那层和展示区一样大：淡出画在它身上（画在里面那层上的话，内容一长渐隐就落到看不见的地方去了）。
+ * 只在真的超出的那一边淡：底边 28px、右边 24px，两边都超出时取交集。进了交互不裁，展示区自己滚。
+ */
+.flowClip {
+  min-height: 100%;
+}
+
+.body:not([data-interactive]) .flowClip {
+  height: 100%;
+  overflow: hidden;
+}
+
+.body:not([data-interactive]) .flowClip[data-over-y] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+.body:not([data-interactive]) .flowClip[data-over-x] {
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+
+.body:not([data-interactive]) .flowClip[data-over-x][data-over-y] {
+  mask-image:
+    linear-gradient(to bottom, #000 calc(100% - 28px), transparent),
+    linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-composite: intersect;
+}
+
+/* 日志停在末尾：超出的是上边，淡出也在上边。 */
+.body:not([data-interactive]) .flowClip[data-tail][data-over-y] {
+  mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent);
+}
+
+.body:not([data-interactive]) .flowClip[data-tail][data-over-x][data-over-y] {
+  mask-image:
+    linear-gradient(to top, #000 calc(100% - 28px), transparent),
+    linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-composite: intersect;
+}
+
+.flow {
+  padding: 10px 12px;
+}
+
+.md {
+  font-size: var(--wl-fs-meta);
+  line-height: 1.65;
+}
+
+/* 自成一层：新行的高亮（z-index -1）垫在字下面，不沉到卡面底下去。 */
+.pre {
+  position: relative;
+  z-index: 0;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  color: var(--wl-text-2);
+  font-family: var(--wl-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* 一行一块（空行留一行高）。 */
+.line {
+  position: relative;
+  display: block;
+  min-height: 1lh;
+}
+
+/* 折行：续行比行首多缩两格（悬挂缩进），一眼看得出每一条从哪开始。 */
+.pre[data-wrap] {
+  width: auto;
+}
+
+.pre[data-wrap] .line {
+  padding-left: 2ch;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  text-indent: -2ch;
+}
+
+/*
+ * 文件更新后新的几行：整行（连左右留白）垫一层强调色、左边一道竖线，停一会儿再淡下去。
+ * 两个一样的动画按 data-new 的 0 / 1 轮换：同一行连着两次都是新的，也从头再亮一次。
+ */
+.line[data-new]::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0 -12px;
+  background: color-mix(in oklab, var(--wl-accent) 16%, transparent);
+  box-shadow: inset 2px 0 0 var(--wl-accent);
+  opacity: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.line[data-new="0"]::before {
+  animation: newLineA 3.2s var(--wl-ease-out);
+}
+
+.line[data-new="1"]::before {
+  animation: newLineB 3.2s var(--wl-ease-out);
+}
+
+@keyframes newLineA {
+  0%,
+  35% {
+    opacity: 1;
+  }
+}
+
+@keyframes newLineB {
+  0%,
+  35% {
+    opacity: 1;
+  }
+}
+
+/*
+ * 按行看的日志（LogFlow）：错误、警告行左边一道状态色细线、字换成状态色；筛着看时的上下文行淡一些；
+ * 命中的字垫一层强调色；不挨着的两段之间一道「跳过 N 行」；还没写完的最后一行淡一点。
+ */
+.line[data-level] {
+  margin-left: -12px;
+  padding-left: 12px;
+  box-shadow: inset 2px 0 0 currentcolor;
+}
+
+.pre[data-wrap] .line[data-level] {
+  padding-left: calc(12px + 2ch);
+}
+
+/* 着色的行往左伸到了展示区边上：新行的底色从那里起，别再往外伸。 */
+.line[data-level][data-new]::before {
+  left: 0;
+}
+
+.line[data-level="error"] {
+  color: var(--wl-danger);
+}
+
+.line[data-level="warn"] {
+  color: var(--wl-warn);
+}
+
+.line[data-ctx] {
+  color: var(--wl-text-3);
+}
+
+.line[data-pending] {
+  opacity: 0.72;
+}
+
+.hit {
+  border-radius: calc(2px * var(--wl-round, 1));
+  background: color-mix(in oklab, var(--wl-accent) 26%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--wl-accent) 30%, transparent);
+  color: var(--wl-text);
+}
+
+.longMark {
+  color: var(--wl-text-3);
+}
+
+.skip {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 3px 0;
+  color: var(--wl-text-3);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.skip::after {
+  flex: 1;
+  border-top: 1px dashed var(--wl-line);
+  content: "";
+}
+
+/* 进了交互、往上翻着看：底下浮着「回到最新」（粘在展示区底边，跟着滚动不走）。 */
+.jump {
+  position: sticky;
+  bottom: 8px;
+  display: flex;
+  justify-content: center;
+  height: 0;
+  overflow: visible;
+}
+
+.jumpButton {
+  position: relative;
+  bottom: 30px;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: calc(12px * var(--wl-round, 1));
+  background: var(--wl-accent);
+  box-shadow: var(--wl-shadow-1);
+  color: var(--wl-accent-on);
+  font: inherit;
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+  cursor: pointer;
+  animation: jumpIn 0.22s var(--wl-ease-out) both;
+}
+
+.jumpButton:hover {
+  background: var(--wl-accent-strong);
+}
+
+@keyframes jumpIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.moreLines {
+  margin: 6px 0 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+/* 日志停在末尾：前面还有多少写在最上面（内容短、一屏放得下时看得到）。 */
+.earlier {
+  margin: 0 0 6px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+/*
+ * ── 文件夹：图墙（ResourceDisplay 的 GalleryView） ──
+ * 格子贴着展示区排、之间留一道细缝，最新的一张占左上角的大格；格子先垫一层浅底，图读回来淡入。
+ * 大格左下角压一条渐暗写文件名；露不下的写在最后一格上（半透明黑底「+N」）。
+ * 进了交互每格是按钮：悬停图微微放大（只动 transform），点了打开文件夹看那一张。
+ * 新加、改过的那几张内沿描一圈强调色，停一会儿淡下去（data-new 0 / 1 轮换，和新的文字行一样）。
+ */
+.gallery {
+  display: grid;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: calc(3px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+  font: inherit;
+}
+
+.tileImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: freshIn 220ms var(--wl-ease-out);
+}
+
+.gallery[data-fit="contain"] .tileImage {
+  object-fit: contain;
+}
+
+button.tile {
+  cursor: zoom-in;
+}
+
+.gallery button.tile .tileImage {
+  transition: transform 260ms var(--wl-ease-out);
+}
+
+.gallery button.tile:hover .tileImage {
+  transform: scale(1.04);
+}
+
+button.tile:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+.tileName {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 16px 8px 5px;
+  overflow: hidden;
+  background: linear-gradient(transparent, rgb(0 0 0 / 0.55));
+  color: #fff;
+  font-size: var(--wl-fs-micro);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.tileMore {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.5);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.tile[data-new]::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--wl-accent);
+  opacity: 0;
+  content: "";
+  pointer-events: none;
+}
+
+.tile[data-new="0"]::after {
+  animation: newLineA 3.2s var(--wl-ease-out);
+}
+
+.tile[data-new="1"]::after {
+  animation: newLineB 3.2s var(--wl-ease-out);
+}
+
+/* 文件夹里没有图：一行一项，左边类型签、右边大小，行间一道淡线。 */
+.folderList {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  font-size: var(--wl-fs-micro);
+}
+
+.folderRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--wl-line) 60%, transparent);
+}
+
+.folderIcon {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: 30px;
+  color: var(--wl-text-3);
+}
+
+.folderName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wl-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folderSize {
+  flex: none;
+  color: var(--wl-text-3);
+  font-family: var(--wl-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.folderMore {
+  padding: 6px 12px;
+  color: var(--wl-text-3);
+}
+
+.folderTime {
+  flex: none;
+  color: var(--wl-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 文件排成格子：一格一个大一号的类型记号、名字最多两行、下面大小（和修改时间）。 */
+.folderGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  font-size: var(--wl-fs-micro);
+}
+
+.folderGrid .folderMore {
+  grid-column: 1 / -1;
+  padding: 4px;
+}
+
+.folderCell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 4px 6px;
+  border-radius: calc(6px * var(--wl-round, 1));
+  /* 拿字色调一层薄底：镂空的卡（底是画布色）上也看得出一格一格。 */
+  background: color-mix(in oklab, var(--wl-text) 6%, transparent);
+}
+
+.folderCellIcon {
+  display: grid;
+  place-items: center;
+  height: 26px;
+  color: var(--wl-text-3);
+}
+
+.folderCellName {
+  display: -webkit-box;
+  width: 100%;
+  overflow: hidden;
+  color: var(--wl-text);
+  line-height: 1.3;
+  text-align: center;
+  word-break: break-all;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* 格子里的大小、修改时间：一行一样、居中，放不下就截。 */
+.folderCellMeta {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表格（table.module.css）：贴边排，表头那条底色横穿整张卡；钉住的格子垫卡面色（镂空的卡垫画布色）。 */
+.sheet {
+  --tbl-surface: var(--wl-file-surface);
+}
+
+.card:is([data-board-look="clear"], [data-board-look="bare"]) .sheet {
+  --tbl-surface: var(--wl-canvas);
+}
+
+.card[data-board-look="glass"] .sheet {
+  --tbl-surface: color-mix(in oklab, var(--wl-file-surface) 55%, var(--wl-canvas));
+}
+
+/*
+ * 右上角的小签：写它的步骤在跑时「生成中」（点慢慢呼吸），现在的文件更新了「刚更新」（落下来、停几秒、淡出）。
+ * 不接鼠标，不挡卡片里的东西。
+ */
+.chip {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-panel);
+  box-shadow:
+    0 0 0 1px var(--wl-line),
+    var(--wl-shadow-1);
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* 筛着看时左上角那枚：写匹配了多少（悬停看在找什么）。接鼠标只为了提示。 */
+.chip[data-side="left"] {
+  right: auto;
+  left: 8px;
+  gap: 4px;
+  color: var(--wl-accent-text);
+  pointer-events: auto;
+}
+
+.chipDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wl-accent);
+}
+
+/* 「生成中」的点和步骤卡上「执行中」同色（强调色），慢慢呼吸；「刚更新」的点不动。 */
+.chip[data-live] .chipDot {
+  animation: liveBreath 1.6s ease-in-out infinite alternate;
+}
+
+@keyframes liveBreath {
+  to {
+    opacity: 0.3;
+  }
+}
+
+.chip[data-fresh] {
+  animation: freshChip 4s var(--wl-ease-out) both;
+}
+
+@keyframes freshChip {
+  0% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  8%,
+  78% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+/* 挂在标题行里的状态签：不要底和框，只留点和字，和标题同一行排开。 */
+.chips {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.chips .chip {
+  position: static;
+  height: auto;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* ── 改尺寸：右下角的拖柄、拖动中的读数 ── */
+
+.grip {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  z-index: 3;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+
+.grip::before {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--wl-accent);
+  border-bottom: 2px solid var(--wl-accent);
+  border-bottom-right-radius: calc(3px * var(--wl-round, 1));
+  content: "";
+}
+
+.sizeTag {
+  position: absolute;
+  right: 0;
+  bottom: -28px;
+  padding: 2px 8px;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: var(--wl-tip);
+  color: var(--wl-tip-on);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fresh,
+  .loading::after,
+  .chip[data-live] .chipDot,
+  .tileImage,
+  .jumpButton {
+    animation: none;
+  }
+
+  .gallery button.tile .tileImage {
+    transition: none;
+  }
+
+  .gallery button.tile:hover .tileImage {
+    transform: none;
+  }
+
+  /* 「刚更新」、新行的高亮只淡入淡出，不落下来（不淡的话它们就一直亮着）。 */
+  .chip[data-fresh] {
+    animation-name: freshChipStill;
+  }
+}
+
+@keyframes freshChipStill {
+  0% {
+    opacity: 0;
+  }
+  8%,
+  78% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ── 「画布展示」：面板里一行摘要 + 「调整」，细项在浮层里（DisplaySettings.tsx） ── */
+
+.toggleBox {
+  position: relative;
+}
+
+/* 右边让出「调整」的位置。 */
+.toggleMain[data-adjust] {
+  padding-right: 84px;
+}
+
+.summary {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 「调整」的座位：贴着开关块右边、上下居中（用 flex 居中，不占按钮自己的 transform，留给出入场）。 */
+.adjustSeat {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+}
+
+.adjust {
+  transform-origin: right center;
+}
+
+/* 打开展示时从右边长出来（关掉时由 motion.tsx 的 useExit 原地缩回）；刷新、换选中时就在那，不放。 */
+.adjust[data-grow] {
+  animation: adjustIn 320ms var(--wl-spring) both;
+}
+
+@keyframes adjustIn {
+  from {
+    opacity: 0;
+    transform: translateX(6px) scale(0.9);
+  }
+}
+
+/*
+ * 浮层从哪来：挂在开关块下面时从「调整」那个角长出来；画布上摆在卡片旁边时从卡片那一侧滑出来、收的时候退回去。
+ * 入场 / 收起的时长、回弹沿用 ui.module.css 的 hintIn / floatOut，只换方向。
+ */
+.optionsPop {
+  padding: 12px;
+  transform-origin: top right;
+  /* 窗口很矮、比整个视图还高时限高滚动（高度由摆位算好写在行内）。 */
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+
+.optionsPop[data-side="left"] {
+  transform-origin: right 24px;
+  animation-name: optInFromRight;
+}
+
+.optionsPop[data-side="right"] {
+  transform-origin: left 24px;
+  animation-name: optInFromLeft;
+}
+
+.optionsPop[data-side="left"][data-leaving="true"] {
+  animation-name: optOutToRight;
+}
+
+.optionsPop[data-side="right"][data-leaving="true"] {
+  animation-name: optOutToLeft;
+}
+
+@keyframes optInFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(14px) scale(0.92);
+  }
+}
+
+@keyframes optInFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-14px) scale(0.92);
+  }
+}
+
+@keyframes optOutToRight {
+  to {
+    opacity: 0;
+    transform: translateX(4px) scale(0.98);
+  }
+}
+
+@keyframes optOutToLeft {
+  to {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.98);
+  }
+}
+
+.options {
+  /* 每行左边标签那一列多宽（三个字放得下）；缩进的行、提示都对着它。 */
+  --opt-label: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 几组之间一道细线：尺寸、内容（日志 / 表格 / 文件夹）、外观、模型一眼分得开。 */
+.optGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.options > .optGroup + .optGroup {
+  padding-top: 14px;
+  border-top: 1px solid var(--wl-line);
+}
+
+/* 组标题：比每行的标签深、粗一档；内容那组前面一个类型记号、后面淡色的文件名（长了截断）。 */
+.optHead {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  color: var(--wl-text);
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+}
+
+.optHeadText {
+  flex: none;
+}
+
+.optHeadSub {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optHeadIcon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+}
+
+.optTip {
+  display: inline-grid;
+  place-items: center;
+  color: var(--wl-text-3);
+  cursor: help;
+}
+
+.optTip:hover {
+  color: var(--wl-text);
+}
+
+.optSwitch {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  font-size: var(--wl-fs-meta);
+  text-align: left;
+  cursor: pointer;
+}
+
+.optSwitch:focus-visible {
+  border-radius: calc(4px * var(--wl-round, 1));
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 2px;
+}
+
+/*
+ * 外观小样：一小块带点的画布，上面一张迷你卡按那种样子画（卡片、柔边、纯镂空、毛玻璃）。
+ * 选中的那张描一圈强调色；「跟随设置」画的是设置里现在用的那种。
+ */
+/* 定位：选中圈（PickThumb）按这一格量位置。 */
+.looks {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.lookTile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wl-text-3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lookArt {
+  position: relative;
+  display: block;
+  height: 40px;
+  overflow: hidden;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background-color: var(--wl-canvas);
+  background-image: radial-gradient(
+    color-mix(in oklab, var(--wl-dot), var(--wl-text-3) 45%) 0.8px,
+    transparent 1px
+  );
+  background-size: 5px 5px;
+  box-shadow: inset 0 0 0 1px var(--wl-line);
+}
+
+/* 悬停描深一档：画在上面一层，淡入淡出它（不过渡 box-shadow）。 */
+.lookArt::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px var(--wl-line-strong);
+  content: "";
+  opacity: 0;
+  transition: opacity 120ms linear;
+  pointer-events: none;
+}
+
+.lookTile:hover .lookArt::after {
+  opacity: 1;
+}
+
+/* 选中圈：PickThumb 量好选中那张小样的位置、大小，滑过去。 */
+.lookRing {
+  z-index: 2;
+  border-radius: calc(6px * var(--wl-round, 1));
+  box-shadow: inset 0 0 0 2px var(--wl-accent);
+}
+
+.lookTile:focus-visible {
+  outline: none;
+}
+
+.lookTile:focus-visible .lookArt {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 2px;
+}
+
+.lookMini {
+  position: absolute;
+  inset: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: calc(3px * var(--wl-round, 1));
+}
+
+.lookMini > span {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--wl-text-3);
+}
+
+.lookMini > span:nth-child(1) {
+  width: 55%;
+  background: var(--wl-accent);
+}
+
+.lookMini > span:nth-child(3) {
+  width: 75%;
+}
+
+.lookArt[data-art="card"] .lookMini {
+  border: 1px solid var(--wl-file-border);
+  background: var(--wl-file-surface);
+  box-shadow: var(--wl-shadow-1);
+}
+
+.lookArt[data-art="clear"] .lookMini {
+  background: var(--wl-canvas);
+  box-shadow: 0 0 5px 5px var(--wl-canvas);
+}
+
+.lookArt[data-art="glass"] .lookMini {
+  border: 1px solid color-mix(in oklab, var(--wl-line-strong) 70%, transparent);
+  background: color-mix(in oklab, var(--wl-file-surface) 55%, transparent);
+  backdrop-filter: blur(1.5px);
+}
+
+/* 名字是 FadeText：灰、深两层交叉淡。 */
+.lookName {
+  --wl-off: var(--wl-text-3);
+  --wl-on: var(--wl-text);
+  font-size: var(--wl-fs-micro);
+  text-align: center;
+}
+
+.lookTile:hover .lookName {
+  --wl-off: var(--wl-text-2);
+}
+
+.lookTile[aria-checked="true"] .lookName {
+  font-weight: 600;
+}
+
+/*
+ * 大小一组：大小（三档和尺寸框并排，同高 32）、摆放、缩放各一行，左边一列短标签。
+ * 尺寸框是一个输入框的样子，里面两个无框的数字、中间一个 ×，聚焦哪一半整框描边。
+ * 缩放是和分段一样的一条底：− 数 +，点中间的数还原。
+ */
+.dims {
+  display: flex;
+  flex: none;
+  align-items: center;
+  box-sizing: border-box;
+  height: 32px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+  transition:
+    border-color 120ms linear,
+    background-color 120ms linear;
+}
+
+.dims:hover {
+  background: var(--wl-fill-strong);
+}
+
+.dims:focus-within {
+  border-color: var(--wl-accent);
+  background: var(--wl-panel);
+}
+
+.dimsX {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.sizeInput {
+  width: 4.2ch;
+  padding: 0 4px;
+  color: var(--wl-text);
+  font-size: var(--wl-fs-meta);
+  text-align: center;
+}
+
+.optLine {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.optLabel {
+  flex: none;
+  width: var(--opt-label, 32px);
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.optGrow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 一格里排好几行的（列的小药丸）：标签对着第一行。 */
+.optLine[data-align="top"] {
+  align-items: flex-start;
+}
+
+.optLine[data-align="top"] > .optLabel {
+  line-height: 22px;
+}
+
+.optNote {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+/*
+ * 「内容」一组的筛选（DisplayContent.tsx）：放大镜 + 输入框 + 三个小开关挤在一个底框里（和缩放那块同一种底），
+ * 写错了底框描一圈危险色；下面一行左边两个现成的筛选（小药丸）、右边「前后带」几行。
+ */
+.filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filterBox {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  height: 28px;
+  padding: 0 2px 0 8px;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+}
+
+.filterBox:focus-within {
+  box-shadow: inset 0 0 0 1px var(--wl-accent);
+}
+
+.filterBox[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--wl-danger);
+}
+
+.filterInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--wl-text);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+}
+
+.filterInput::placeholder {
+  color: var(--wl-text-3);
+  font-family: inherit;
+}
+
+.clearFilter {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--wl-text-3);
+  cursor: pointer;
+}
+
+.clearFilter:hover {
+  background: var(--wl-hover);
+  color: var(--wl-text);
+}
+
+.clearFilter:focus-visible {
+  outline: 2px solid var(--wl-accent);
+}
+
+.flag {
+  flex: none;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-3);
+  font-family: var(--wl-mono);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms linear;
+}
+
+.flag:hover {
+  background: var(--wl-hover);
+  color: var(--wl-text);
+}
+
+.flag[aria-pressed="true"] {
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.flag:focus-visible,
+.preset:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+.filterProblem {
+  margin: 0 0 0 calc(var(--opt-label, 32px) + 8px);
+  color: var(--wl-danger);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.4;
+}
+
+.filterMore {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: calc(var(--opt-label, 32px) + 8px);
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.preset {
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(11px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+  font: inherit;
+  font-size: var(--wl-fs-micro);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 120ms linear;
+}
+
+.preset:hover {
+  background: var(--wl-fill-strong);
+  color: var(--wl-text);
+}
+
+.preset[aria-pressed="true"] {
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+/*
+ * 表格的列：一列一个小药丸，露着的是强调色底，藏起来的是灰底、字划掉。列多时折行，再多在框里滚。
+ * 只剩一列露着时那一列按不动（淡一档）。
+ */
+.columns {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  max-height: 104px;
+  overflow-y: auto;
+}
+
+.columns .preset {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.columns .preset[data-off] {
+  color: var(--wl-text-3);
+  text-decoration: line-through;
+}
+
+.columns .preset:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.context {
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.zoom {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+}
+
+.zoomStep {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-2);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.zoomStep:hover:not(:disabled) {
+  background: var(--wl-panel);
+  color: var(--wl-text);
+}
+
+.zoomStep:disabled {
+  color: var(--wl-text-3);
+  cursor: default;
+  opacity: 0.5;
+}
+
+.zoomStep:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+/* 中间的读数：一个能填的数字加一个不动的「%」，横排；悬停、聚焦时铺一层面板底，像一个小输入框。 */
+.zoomValue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 28px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: calc(6px * var(--wl-round, 1));
+  color: var(--wl-text);
+  font-size: var(--wl-fs-meta);
+  font-variant-numeric: tabular-nums;
+  cursor: text;
+  transition:
+    background-color 120ms linear,
+    border-color 120ms linear;
+}
+
+.zoomValue:hover {
+  background: var(--wl-panel);
+}
+
+.zoomValue:focus-within {
+  border-color: var(--wl-accent);
+  background: var(--wl-panel);
+}
+
+.zoom[aria-disabled] .zoomValue {
+  color: var(--wl-text-3);
+  cursor: default;
+}
+
+.zoom[aria-disabled] .zoomValue:hover {
+  background: transparent;
+}
+
+.zoomInput {
+  width: 3.4ch;
+  text-align: right;
+}
+
+.zoomUnit {
+  color: var(--wl-text-3);
+}
+
+.zoomUnit[data-word] {
+  margin-left: 3px;
+}
+
+/*
+ * 能改的数字（RollInput）：输入框和一层 SwapText 叠在同一格。没在改时输入框的字透明、上面那层显示（换值时滚动）；
+ * 聚焦后上面那层藏起来、露出输入框里的字（光标、选中照常）。
+ */
+.roll {
+  position: relative;
+  display: inline-grid;
+}
+
+.rollInput {
+  grid-area: 1 / 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: transparent;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+
+.rollInput:focus {
+  color: var(--wl-text);
+}
+
+.rollShow {
+  display: flex;
+  grid-area: 1 / 1;
+  align-items: center;
+  justify-content: center;
+  color: var(--wl-text);
+  pointer-events: none;
+}
+
+.zoomValue .rollShow {
+  justify-content: flex-end;
+}
+
+.zoom[aria-disabled] .rollShow {
+  color: var(--wl-text-3);
+}
+
+.roll:focus-within .rollShow {
+  visibility: hidden;
+}
+
+/*
+ * ── 各轮产出（HistoryBar） ──
+ * 两块都和标题行右边的按钮一样：悬停卡片、选中、进了交互、开着细项时才出来。
+ * - 标题行里写看的是哪一版，跟着时间线上悬停的那一点换字；点它下拉出各版列表。钉在旧版时换强调色底，旁边一个 ✕ 回到最新。
+ * - 卡片底边外一条和卡片等宽的时间线（挂在 historyRail 里，卡片不裁）；拖卡片、改大小时让开。
+ */
+.historySlot {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+}
+
+.historySlot:empty {
+  display: none;
+}
+
+.history {
+  display: inline-flex;
+  gap: 1px;
+  align-items: center;
+  min-width: 0;
+  height: 22px;
+  border-radius: calc(6px * var(--wl-round, 1));
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    opacity 140ms linear,
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.historyPick {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 6px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.historyPick > svg {
+  flex: none;
+}
+
+.historyPick:hover,
+.historyPick[aria-expanded="true"] {
+  background: var(--wl-hover);
+}
+
+.history[data-old] .historyPick:hover,
+.history[data-old] .historyPick[aria-expanded="true"] {
+  background: color-mix(in oklab, var(--wl-accent) 14%, transparent);
+}
+
+.historyPick:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -1px;
+}
+
+/* 下拉的小箭头：打开时翻过来。 */
+.historyCaret {
+  display: inline-grid;
+  flex: none;
+  opacity: 0.7;
+  transition: transform 180ms var(--wl-ease-out);
+}
+
+.historyPick[aria-expanded="true"] .historyCaret {
+  transform: rotate(180deg);
+}
+
+:global(.react-flow__node.selected) .history,
+.history[data-open],
+.card[data-display]:hover .history,
+.card[data-display][data-interactive] .history,
+.card[data-display][data-settings] .history {
+  opacity: 1;
+}
+
+.history[data-preview] {
+  color: var(--wl-text);
+}
+
+.history[data-old] {
+  padding-right: 2px;
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+  font-weight: 600;
+}
+
+.historyChipText {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.historyCount {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.historyBack {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-accent-text);
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.historyBack:hover {
+  background: color-mix(in oklab, var(--wl-accent) 18%, transparent);
+}
+
+.historyBack:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -1px;
+}
+
+/* 钉着旧版时又来了新的：✕ 角上一个小点，慢慢呼吸。 */
+.historyBack[data-new]::after {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wl-accent);
+  box-shadow: 0 0 0 2px var(--wl-file-surface);
+  content: "";
+  corner-shape: round;
+  animation: historyNew 1.6s var(--wl-ease) infinite alternate;
+}
+
+@keyframes historyNew {
+  from {
+    opacity: 0.35;
+  }
+}
+
+/* 各版列表：和别处的菜单一样的项，前面一个按判定着色的圆点，后面存下的时间，钉住的那项带钩。 */
+.historyMenu {
+  padding: 4px;
+}
+
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.historyRow {
+  display: flex;
+  flex-direction: column;
+}
+
+.historyItem {
+  --tick: var(--wl-text-3);
+
+  min-height: 30px;
+  font-size: var(--wl-fs-meta);
+}
+
+.historyItem[data-tone="pass"] {
+  --tick: var(--wl-flow-pass);
+}
+
+.historyItem[data-tone="again"] {
+  --tick: var(--wl-flow-fail);
+}
+
+.historyItemDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tick);
+  corner-shape: round;
+}
+
+.historyItem[data-live] .historyItemDot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--wl-text-3);
+}
+
+.historyItemTime {
+  flex: none;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+.historyItemCheck {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  color: var(--wl-accent-text);
+}
+
+.historyDropped {
+  padding: 2px 8px 4px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+/* 时间线挂的位置：卡片底边外，和卡片等宽。上面 6px 的缝是时间线自己的桥，指针从卡片移下来不会中途收掉。 */
+.historyRail {
+  position: absolute;
+  z-index: 3;
+  top: 100%;
+  /* 卡片有 1px 边框：往外各扩 1px，和卡片外沿对齐。 */
+  right: -1px;
+  left: -1px;
+  padding-top: 6px;
+  pointer-events: none;
+}
+
+.historyRail:empty {
+  display: none;
+}
+
+.historyTimeline {
+  position: relative;
+  height: 42px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition:
+    opacity 160ms linear,
+    transform 240ms var(--wl-ease-out);
+}
+
+/* 上面 6px 的缝：指针从卡片移下来不会中途收掉。 */
+.historyTimeline::before {
+  position: absolute;
+  top: -6px;
+  right: 0;
+  left: 0;
+  height: 6px;
+  content: "";
+}
+
+/*
+ * 底下垫一层画布色、四边羽化：在画布上看不出来，但从卡片下面经过的连线、线上的小牌子走到这里就淡下去，
+ * 不会从进度条中间穿过。
+ */
+.historyTimeline::after {
+  position: absolute;
+  z-index: -1;
+  inset: -4px -20px -2px;
+  background: var(--wl-canvas);
+  content: "";
+  mask-image:
+    linear-gradient(90deg, transparent, #000 20px, #000 calc(100% - 20px), transparent),
+    linear-gradient(transparent, #000 6px, #000 calc(100% - 8px), transparent);
+  mask-composite: intersect;
+  pointer-events: none;
+}
+
+.historyTimeline:focus-within,
+:global(.react-flow__node.selected) .historyTimeline,
+.card[data-display]:hover .historyTimeline {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+}
+
+.card[data-display][data-resizing] .historyTimeline,
+:global(.react-flow__node.dragging) .card[data-display] .historyTimeline {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/*
+ * 时间线挂在卡片外面：悬停、选中时把这张卡抬到别的卡片和连线上的小牌子（循环线上的回环标、交接牌）之上，
+ * 不然时间线会被压在下面。React Flow 的层级写在行内，所以要 !important。
+ */
+:global(.react-flow__node):has(> .card[data-display]:hover),
+:global(.react-flow__node.selected):has(> .card[data-display]) {
+  /* biome-ignore lint/complexity/noImportantStyles: 要压过 React Flow 写在行内的层级 */
+  z-index: 1001 !important;
+}
+
+/*
+ * 刻度轴。一列一版，整列（整条高）都是命中区。从下往上叠：
+ * - historyAxis：1px 细线，从第一版的刻度画到最新那道。
+ * - historyFill：走过的一段，强调色，按 --at 横向缩放。
+ * - 每列一道刻度（historyMajor），一律中性灰：判定写在下面的说明里，不在刻度上着色。
+ * - historyThumb：一格宽的滑块，按 --at 横移，中间一枚实心的钟表；换版时表针转（转多少由行内的角度给）。
+ *   滑块、走过的一段用同一条曲线（--glide），滑的时候粘在一起。
+ * 头尾两道刻度正对着看得见的卡片边（--pad 是离时间线边多远：卡片样子对着卡片的边框；没有卡面的几种外观
+ * 对着悬停时那圈虚线，它在卡片外 6px）。轨道比时间线宽出半格、往左挪半格，每一格（版与版的间距 --c）都一样宽，
+ * 刻度在格子正中。宽出来的那点也接指针。
+ * 只动 transform / opacity。
+ */
+.historyTrack {
+  /* 换版时滑块、表圈、走过的一段、说明一起走：缓起缓停、不回弹，像推着一样滑过去。 */
+  --glide: 620ms cubic-bezier(0.45, 0, 0.2, 1);
+  --axis: 13px;
+  --pad: 1.5px;
+  --c: calc((100% - 2 * var(--pad)) / (var(--n) - 1));
+
+  position: relative;
+  display: grid;
+  width: calc(var(--c) * var(--n));
+  height: 100%;
+  margin-left: calc(var(--pad) - var(--c) / 2);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.card[data-display]:is([data-board-look="clear"], [data-board-look="bare"]) .historyTrack {
+  --pad: -4.25px;
+}
+
+.historyAxis,
+.historyFill {
+  position: absolute;
+  top: var(--axis);
+  right: calc(50% / var(--n));
+  left: calc(50% / var(--n));
+  pointer-events: none;
+}
+
+.historyAxis {
+  height: 1px;
+  background: var(--wl-line-strong);
+}
+
+.historyFill {
+  height: 2px;
+  margin-top: -0.5px;
+  border-radius: 1px;
+  background: var(--wl-accent);
+  transform: scaleX(calc(var(--at) / (var(--n) - 1)));
+  transform-origin: left;
+  transition: transform var(--glide);
+}
+
+.historyTick {
+  --tick: var(--wl-text-3);
+
+  position: relative;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+
+.historyMajor {
+  position: absolute;
+  top: calc(var(--axis) - 5px);
+  left: 50%;
+  width: 1.5px;
+  height: 11px;
+  margin-left: -0.75px;
+  border-radius: 1px;
+  background: var(--tick);
+  transition: transform 220ms var(--wl-spring, var(--wl-ease-out));
+}
+
+/* 悬停那道变高、变亮；钉住的那道（悬停预览着别处时）也高一截，看得出移开后回到哪。 */
+.historyTick:hover,
+.historyTick[data-kept] {
+  --tick: var(--wl-text);
+}
+
+.historyTick:hover .historyMajor,
+.historyTick[data-kept] .historyMajor {
+  transform: scaleY(1.55);
+}
+
+/* 钉着旧版时又来了新的：最新那道刻度亮起来、慢慢呼吸。 */
+.historyTick[data-new] {
+  --tick: var(--wl-text);
+}
+
+.historyTick[data-new] .historyMajor {
+  animation: historyNew 1.6s var(--wl-ease) infinite alternate;
+}
+
+.historyThumb {
+  position: absolute;
+  top: calc(var(--axis) - 10px);
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: calc(100% / var(--n));
+  height: 20px;
+  pointer-events: none;
+  transform: translateX(calc(var(--at) * 100%));
+  transition: transform var(--glide);
+}
+
+/*
+ * 钟表：和标题行那枚一样是线描的，表圈就是进度——强调色从十二点顺时针走到「第几版 / 共几版」，没走到的部分是浅灰的底圈。
+ * 底下一块画布色的圆把轴线断开（在画布上看不出来）。
+ * 例外（只动 transform / opacity 的规矩）：表圈伸缩动的是 stroke-dashoffset——20px 的一个小 SVG，重绘只在这一小块里。
+ */
+.historyClock {
+  display: block;
+  overflow: visible;
+  transition: transform 180ms var(--wl-spring, var(--wl-ease-out));
+}
+
+/* 整枚表滚过去：和滑块横移同一条曲线、同样长，像轮子沿着轴滚。 */
+.historyRoll {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  transition: transform var(--glide);
+}
+
+.historyClockBack {
+  fill: var(--wl-canvas);
+}
+
+.historyClockTrack,
+.historyClockRing,
+.historyClockHands {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.historyClockTrack {
+  stroke: var(--wl-line-strong);
+}
+
+.historyClockRing {
+  stroke: var(--wl-accent);
+  stroke-dasharray: 1;
+  transform: rotate(-90deg);
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  transition: stroke-dashoffset var(--glide);
+}
+
+.historyClockHands {
+  stroke: var(--wl-accent-text);
+}
+
+/* 按住拖的时候表稍微鼓一下。 */
+.historyTrack:active .historyClock {
+  transform: scale(1.12);
+}
+
+.historyTrack:has(.historyTick:focus-visible) .historyClockBack {
+  stroke: var(--wl-accent);
+  stroke-width: 1;
+}
+
+/*
+ * 说明：一条和刻度轴等宽的轨道，整条按 --at 横移到显示的那道刻度上（% 以轨道自身宽度算），
+ * 里面的字以自己的中心对准；头尾两道改成和卡片左右边对齐（刻度离边 --pad）。换版时滑过去，只动 transform。
+ */
+.historyCaption {
+  position: absolute;
+  top: 25px;
+  right: 0;
+  left: 0;
+  height: 16px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(calc((var(--at) + 0.5) * 100% / var(--n)));
+  transition:
+    opacity 140ms linear,
+    transform var(--glide);
+}
+
+.historyTrack:is(:hover, :focus-within) .historyCaption {
+  opacity: 1;
+}
+
+.historyCaptionText {
+  --tick: var(--wl-text-3);
+
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  height: 16px;
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+  font-weight: 500;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  transition: transform var(--glide);
+}
+
+.historyCaption[data-edge="first"] .historyCaptionText {
+  transform: translateX(calc(-1 * var(--pad)));
+}
+
+.historyCaption[data-edge="last"] .historyCaptionText {
+  transform: translateX(calc(-100% + var(--pad)));
+}
+
+.historyCaptionText[data-tone="pass"] {
+  --tick: var(--wl-flow-pass);
+}
+
+.historyCaptionText[data-tone="again"] {
+  --tick: var(--wl-flow-fail);
+}
+
+.historyCaptionDot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tick);
+  corner-shape: round;
+}
+
+.historyCaptionText:not([data-tone]) .historyCaptionDot {
+  display: none;
+}
+
+.historyCaptionName {
+  color: var(--wl-text);
+}
+
+.historyCaptionTime {
+  color: var(--wl-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+:global([data-look="swiss"]) .dims {
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+
+/* 「减少动态效果」：浮层、「调整」直接出现（放在最后，压得过上面同样具体的入场规则）。 */
+@media (prefers-reduced-motion: reduce) {
+  .adjust[data-grow],
+  .optionsPop[data-side],
+  .optionsPop[data-side][data-leaving="true"] {
+    animation: none;
+  }
+
+  .lookArt::after {
+    transition: none;
+  }
+
+  .history,
+  .historyPick,
+  .historyCaret,
+  .historyTimeline,
+  .historyFill,
+  .historyMajor,
+  .historyThumb,
+  .historyClock,
+  .historyRoll,
+  .historyClockRing,
+  .historyCaption,
+  .historyCaptionText {
+    transition: none;
+  }
+
+  .historyTick[data-new] .historyMajor,
+  .historyBack[data-new]::after {
+    animation: none;
+  }
+}
+
+/*
+ * 查看框里看日志（LogViewer.tsx）：顶上一条筛选粘在正文区顶端（面板底色，底下一道细线），
+ * 正文和卡片里同一套行样式，只是字大一号、留白宽一些；前后各一行小字说还有多少、读到哪了。
+ */
+.logView {
+  min-height: 100%;
+}
+
+.logBar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--wl-line);
+  background: var(--wl-panel);
+}
+
+.filter[data-inline] {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+}
+
+.filter[data-inline] > .optLine {
+  flex: 1 1 260px;
+  max-width: 420px;
+}
+
+.filter[data-inline] .filterProblem {
+  order: 3;
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.filter[data-inline] .filterMore {
+  flex: 1 1 auto;
+  padding-left: 0;
+}
+
+.logBarEnd {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.logCount {
+  margin-right: 6px;
+  color: var(--wl-accent-text);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.logError {
+  margin: 12px 20px 0;
+  color: var(--wl-danger);
+  font-size: var(--wl-fs-meta);
+}
+
+.logBody {
+  padding: 4px 20px 24px;
+}
+
+.logEdge {
+  margin: 8px 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  text-align: center;
+}
+
+.logEmpty {
+  margin: 48px 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+  text-align: center;
+}
+
+.logPre {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.pre.logPre[data-wrap] .line[data-level] {
+  margin-left: -20px;
+  padding-left: calc(20px + 2ch);
+}
+
+.logPre .line[data-new]::before {
+  inset: 0 -20px;
+}
+
+.logPre .line[data-level][data-new]::before {
+  left: 0;
+}
+
+.logSkeleton {
+  height: 240px;
+}
+
+/* 筛着看时一行是个按钮：点了回到全文停在这里。悬停垫一层浅底。 */
+button.line[data-locate] {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  white-space: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 字色跟着外面（错误、警告、上下文行各自的颜色压得过它）。 */
+:where(button.line[data-locate]) {
+  color: inherit;
+}
+
+button.line[data-locate]:hover {
+  background: var(--wl-hover);
+}
+
+button.line[data-locate]:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+/* ── 图墙张数：8 × 6 的小方格挑几列几行 ── */
+
+/* 和上面一行的选项左边对齐（让开标签那一列）。 */
+.optIndent {
+  padding-left: calc(var(--opt-label, 32px) + 8px);
+}
+
+.gridPick {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.gridCells {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(8, 14px);
+  gap: 3px;
+}
+
+/* 一格：灰底；在选中范围里是强调色浅底，第一张的大格那四格深一档。只换颜色（按项目的 120ms 线性）。 */
+.gridCell {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(3px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.gridCell[data-on] {
+  background: color-mix(in oklab, var(--wl-accent) 38%, var(--wl-fill));
+}
+
+.gridCell[data-hero] {
+  background: color-mix(in oklab, var(--wl-accent) 70%, var(--wl-fill));
+}
+
+.gridCell:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gridCell {
+    transition: none;
+  }
+}
+
+/* 瑞士：筛选框只留底线，小药丸成方块。 */
+:global([data-look="swiss"]) .filterBox {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--wl-line-strong);
+}
+
+:global([data-look="swiss"]) .filterBox:focus-within {
+  box-shadow: inset 0 -2px 0 var(--wl-text);
+}
+
+:global([data-look="swiss"]) .preset,
+:global([data-look="swiss"]) .flag {
+  border-radius: 0;
+}
+
+:global([data-look="swiss"]) .jumpButton,
+:global([data-look="swiss"]) .chip {
+  box-shadow: 0 0 0 1px var(--wl-text);
+}
+
+:global([data-look="swiss"]) .chips .chip {
+  box-shadow: none;
+}
+
+:global([data-look="swiss"]) .gridCell {
+  border-radius: 0;
+}
+
+:global([data-look="swiss"]) .folderCell {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--wl-line);
+}
+
+:global([data-look="swiss"]) .options > .optGroup + .optGroup {
+  border-top-color: var(--wl-text);
+}

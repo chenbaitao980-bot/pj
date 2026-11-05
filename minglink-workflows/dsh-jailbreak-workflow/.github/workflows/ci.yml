@@ -1,0 +1,44 @@
+name: ci
+
+# 提交与 PR 的门禁：AGENTS.md 里「先构建再验证」那四步，以前全靠人记得手工跑。
+# `package.spec.ts` 的打包守卫读 lib/，缺 lib 时整块 skipIf 静默通过，所以必须先 build 再测。
+#
+# 为什么只有这一个 job：
+# - 文档站（site/）有自己的 lockfile 与独立安装单元，由 docs.yml 在推到 main 且站点文件变动时构建；
+#   `check:settings` 读的 wire.ts / i18n.ts 都在 docs.yml 的触发路径里，不在这里重复。
+# - 六个 `tests/cdp-*.mjs` 要一个跑着的 dsh 网页实例加带 DevTools 端口的 Chrome，且 dsh 的 launch
+#   token 实测十几分钟就 401（见 tests/lib/web-session.mjs 里为它留的 DSH_AUTH_COOKIE 逃生口），
+#   放进 CI 只会稳定地红在无关的地方——留给人工发版前跑。
+# - 没加 Windows 矩阵：仓储层的改名重试、大小写不敏感都按 Windows 行为写了单测，
+#   真机跑通与否这里不下结论，别拿它当已通过。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 版本取 package.json 的 packageManager，且必须排在 setup-node 的 cache: pnpm 之前。
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run notices:check
+      - run: pnpm run typecheck
+      - run: pnpm run lint
+      - run: pnpm test

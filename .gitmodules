@@ -1,0 +1,6 @@
+[submodule "dsh-purge"]
+	path = dsh-purge
+	url = https://github.com/HunYiSage/dsh-purge.git
+[submodule "minglink-workflows/dsh-workflows"]
+	path = minglink-workflows/dsh-workflows
+	url = https://github.com/Minglink/dsh-workflows.git

@@ -1,0 +1,73 @@
+/**
+ * dsh-workflow-lite — 画布看主机：给资源选文件、文件夹、Skill 时列出主机上有什么。
+ *
+ * 都走 RPC（`host/list`、`host/skills`、`host/skill`）。Skill 清单按「会话 + 工作区」记一份，
+ * 一页里只问一次——选 Skill 是顺手的事，不该每点一下都等一趟。看某个 skill 的全文时才去读它。
+ * 顺带捎上桌面能力（用系统程序打开 SKILL.md、在文件管理器里显示）和记忆库。
+ *
+ * @module @xiaoso/dsh-workflow-lite/client/app/host
+ */
+
+import type { HostListResponse, HostSkillResponse, HostSkillsResponse } from '../../shared/wire.ts'
+import type { WorkflowLiteRpc } from '../rpc.ts'
+import type { Desktop } from './desktop.ts'
+import { type MemoryStore, memoryStore } from './memories.ts'
+
+export interface HostAccess {
+  /** 会话的工作区（列目录的起点，相对路径按它解析）；不知道就是 `undefined`。 */
+  cwd: string | undefined
+  /** 用系统程序打开文件；宿主没有桌面能力时为 `undefined`。 */
+  desktop: Desktop | undefined
+  /** 列一个目录；不给就是工作区。 */
+  list(path?: string): Promise<HostListResponse>
+  /** 会话里的 agent 能用的 skill。 */
+  skills(): Promise<HostSkillsResponse>
+  /**
+   * 丢掉当前「会话 + 工作区」这一份 skill 清单记忆，下一次 `skills()` 重新问 host。
+   * 模型在会话里新装或删了 skill 之后清单不会自己变——打开「选择 Skill」浮层时调一次。
+   */
+  refreshSkills(): void
+  /** 读一个 skill 的全文。 */
+  skill(name: string): Promise<HostSkillResponse>
+  /** 插件的记忆库（记忆卡引用的就是它里面的一条）。 */
+  memories: MemoryStore
+}
+
+const skillCache = new Map<string, Promise<HostSkillsResponse>>()
+
+export function createHostAccess(
+  rpc: WorkflowLiteRpc,
+  where: { cwd?: string | undefined; session?: string | undefined; desktop?: Desktop | undefined },
+): HostAccess {
+  const { cwd, session } = where
+  const scope = {
+    ...(cwd === undefined ? {} : { cwd }),
+    ...(session === undefined ? {} : { session }),
+  }
+  /** 清单记忆的身份：同一个会话、同一个工作区共用一份。 */
+  const skillKey = `${session ?? ''}\n${cwd ?? ''}`
+  return {
+    cwd,
+    desktop: where.desktop,
+    list: (path) =>
+      rpc.call('host/list', {
+        ...(path === undefined ? {} : { path }),
+        ...(cwd === undefined ? {} : { cwd }),
+      }),
+    skills: () => {
+      let pending = skillCache.get(skillKey)
+      if (pending === undefined) {
+        pending = rpc.call('host/skills', scope)
+        // 失败了不记：下次再点再问。
+        pending.catch(() => skillCache.delete(skillKey))
+        skillCache.set(skillKey, pending)
+      }
+      return pending
+    },
+    refreshSkills: () => {
+      skillCache.delete(skillKey)
+    },
+    skill: (name) => rpc.call('host/skill', { name, ...scope }),
+    memories: memoryStore(rpc),
+  }
+}

@@ -1,0 +1,1270 @@
+/**
+ * dsh-workflow-lite — 工作流中心：标题栏（两页的切换在这里）、运行实例页、存储页。
+ *
+ * 一组东西收进一个圆角框、行间一条细线，和「工作流设置」对话框同一种样子。
+ * 框不裁内容（不写 overflow: hidden），圆角由第一行、最后一行自己画——免得裁掉行里的浮层。
+ */
+
+/* ── 外框与标题栏 ─────────────────────────────────────────── */
+
+div.dialog {
+  width: min(920px, 100%);
+  max-width: none;
+  height: min(620px, 100%);
+}
+
+.head {
+  display: flex;
+  flex: none;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 12px 12px 16px;
+  border-bottom: 1px solid var(--wl-line);
+}
+
+.tabs {
+  flex: none;
+  width: 400px;
+}
+
+/* ── 运行实例：左栏工作区（和「工作流」页同一套 wf* 样式），右栏实例 ──── */
+
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--wl-line);
+}
+
+.search {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  height: 32px;
+  margin: 10px 8px 4px;
+  padding: 0 3px 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-fill);
+  color: var(--wl-text-3);
+  transition: background-color 120ms linear;
+}
+
+/* 搜索框右边还有个小按钮：两个并成一行，边距挪到这一行上。 */
+.searchRow {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  margin: 10px 8px 4px;
+}
+
+.searchRow > .search {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.searchRow > button {
+  flex: none;
+}
+
+.search:hover {
+  background: var(--wl-fill-strong);
+}
+
+.search:focus-within {
+  border-color: var(--wl-accent);
+  background: var(--wl-panel);
+}
+
+.searchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  outline: none;
+}
+
+.searchInput::placeholder {
+  color: var(--wl-text-3);
+  opacity: 0.8;
+}
+
+/* 搜索框下面的列表：边线由外面那一栏（.side）画，列表自己不画，免得出两道。 */
+.sideList {
+  flex: 1 1 auto;
+  padding-top: 4px;
+}
+
+/*
+ * 工作区一项悬停时亮一层（「工作流」页的项外面包着一行，悬停写在那一行上；这里没有那一层，自己写）。
+ * 选中的那项底下是滑块，不再叠悬停层。
+ */
+.sideList .wfItem:hover:not([aria-current="true"])::before {
+  opacity: 1;
+}
+
+.sideEmpty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+}
+
+/* 名字和「本工作区」小标一行：名字太长先省略，小标不挤掉。 */
+.wsName {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.wsActive {
+  color: var(--wl-accent-text);
+  font-weight: 600;
+}
+
+.wsTitle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.wsPath {
+  overflow: hidden;
+  font-family: var(--wl-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 小标签：「本工作区」「当前」用强调色，「本会话」用中性色。 */
+.tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tag[data-tone="plain"] {
+  background: var(--wl-fill-strong);
+  color: var(--wl-text-2);
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--wl-line);
+  border-radius: calc(10px * var(--wl-round, 1));
+  background: var(--wl-panel);
+}
+
+.box > :first-child {
+  border-top-left-radius: calc(9px * var(--wl-round, 1));
+  border-top-right-radius: calc(9px * var(--wl-round, 1));
+}
+
+.box > :last-child {
+  border-bottom-right-radius: calc(9px * var(--wl-round, 1));
+  border-bottom-left-radius: calc(9px * var(--wl-round, 1));
+}
+
+/*
+ * 实例框：所有行共用这一套列（行用 subgrid 接上），状态小标、按钮组按最宽的那个定宽，
+ * 进度条和按钮上下对齐，不随「完成 / 执行中」的字数、有没有「移到本会话」挪位。
+ */
+.runBox {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) 80px max-content max-content;
+  column-gap: 14px;
+}
+
+/*
+ * 一行：挂上时按序往上浮出来（`--i` 是第几行，前十行错开）；悬停的底色画在 ::before 上、渐显。
+ * ::before 绝对定位，不占 subgrid 的格子。
+ */
+.row {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  row-gap: 8px;
+  align-items: center;
+  min-height: 58px;
+  padding: 9px 8px 9px 14px;
+  isolation: isolate;
+  animation: rowIn 280ms var(--wl-ease) backwards;
+  animation-delay: calc(min(var(--i, 0), 10) * 32ms);
+}
+
+.row::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--wl-hover);
+  content: "";
+  opacity: 0;
+  transition: opacity 140ms linear;
+  pointer-events: none;
+}
+
+.row + .row {
+  border-top: 1px solid var(--wl-line);
+}
+
+.row:hover::before {
+  opacity: 1;
+}
+
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* 确认删除：先往右淡出，删完下面的行滑上来（useFlip）。 */
+.row[data-leaving="true"] {
+  animation: rowOut 180ms ease-in both;
+  pointer-events: none;
+}
+
+@keyframes rowOut {
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.titleLine {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.name {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.metaItem {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.metaItem > svg {
+  flex: none;
+}
+
+/* 会话标题与目标可能很长：会话最多占一半，目标吃掉剩下的，都用省略号收尾。 */
+.session {
+  flex: 0 1 auto;
+  max-width: 50%;
+}
+
+.goal {
+  flex: 1 1 0;
+}
+
+.session > span:not(.tag),
+.goal > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sessionName {
+  color: var(--wl-text-2);
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 进度：一行数字 + 一根细条，颜色跟着总状态（--wl-run 见 run.module.css）。 */
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.progressText {
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.progressBar {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: var(--wl-fill-strong);
+}
+
+/*
+ * 填满整条再按比例 scaleX 缩：是 span，不写 display: block 宽度就是 0，怎么缩都是空的。
+ * 挂上时从 0 长到当前进度（跟在这一行浮出来之后），之后进度变了滑过去。
+ */
+.progressFill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--wl-run-fill, var(--wl-run));
+  transform-origin: left center;
+  transition: transform 420ms var(--wl-ease);
+  animation: barIn 620ms var(--wl-ease) backwards;
+  animation-delay: calc(min(var(--i, 0), 10) * 32ms + 140ms);
+}
+
+@keyframes barIn {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* 状态一格：小标靠左，不被列宽拉长。 */
+.state {
+  display: flex;
+  align-items: center;
+}
+
+/* 能改的状态小标：小标本身是按钮，右边一个小箭头；悬停、菜单开着时底下渐显一层。 */
+.statusButton {
+  position: relative;
+  display: inline-flex;
+  flex: 1;
+  gap: 2px;
+  align-items: center;
+  /* 撑满这一列、箭头靠右：小标长短不一（「完成」比「执行中」短），各行的箭头还在一条竖线上。 */
+  justify-content: space-between;
+  padding: 0 4px 0 0;
+  border: 0;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-3);
+  font: inherit;
+  cursor: pointer;
+  isolation: isolate;
+  transition:
+    transform 120ms var(--wl-ease),
+    color 120ms linear;
+}
+
+.statusButton::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--wl-fill-strong);
+  content: "";
+  opacity: 0;
+  transition: opacity 140ms linear;
+}
+
+.statusButton:hover,
+.statusButton[aria-expanded="true"] {
+  color: var(--wl-text-2);
+}
+
+.statusButton:hover::before,
+.statusButton[aria-expanded="true"]::before {
+  opacity: 1;
+}
+
+.statusButton:active {
+  transform: scale(0.97);
+}
+
+/* 状态改了：新小标弹一下。 */
+.statusPop {
+  display: inline-flex;
+  animation: statusPop 320ms var(--wl-ease) backwards;
+}
+
+@keyframes statusPop {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+
+  60% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+.statusButton:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+.statusCaret {
+  display: inline-grid;
+  transition: transform 200ms var(--wl-ease);
+}
+
+.statusButton[aria-expanded="true"] .statusCaret {
+  transform: rotate(180deg);
+}
+
+/*
+ * 状态菜单：和确认卡同一种浮层，内边距收窄，一项两行（名字 + 说明）。
+ * 从小标那一角展开（小标在列表右边，菜单右对齐），各项跟着依次浮出；收起时淡出（useFloat 的 exitMs）。
+ */
+/* 带上元素名：压过同时挂着的 ui.confirmPop 的入场 / 退场（两个模块谁先加载说不准）。 */
+div.statusMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px;
+  transform-origin: top right;
+  animation: menuIn 380ms var(--wl-spring) both;
+}
+
+div.statusMenu[data-up="true"] {
+  transform-origin: bottom right;
+  animation-name: menuIn;
+}
+
+div.statusMenu[data-leaving="true"],
+div.statusMenu[data-leaving="true"][data-up="true"] {
+  animation: menuOut 120ms ease-in both;
+}
+
+@keyframes menuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.84);
+  }
+}
+
+@keyframes menuOut {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+button.statusItem {
+  min-height: 42px;
+  padding: 5px 8px;
+  animation: itemIn 220ms var(--wl-ease) backwards;
+  animation-delay: calc(var(--i, 0) * 18ms + 40ms);
+}
+
+@keyframes itemIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.statusText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.statusName {
+  color: var(--wl-text);
+  font-weight: 600;
+}
+
+.statusHint {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.4;
+}
+
+.statusCheck {
+  display: inline-grid;
+  flex: none;
+  color: var(--wl-accent-text);
+  animation: checkIn 260ms var(--wl-ease) 160ms backwards;
+}
+
+@keyframes checkIn {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+.statusItem[aria-checked="true"]::after {
+  opacity: 1;
+}
+
+/* 确认卡里：通知模型开关，打开时下面多一栏说明；都和标题的字对齐。 */
+.statusOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.statusOptions > label {
+  align-self: flex-start;
+}
+
+/* 打开「通知模型」时说明栏从开关下面滑出来。 */
+input.statusNote {
+  width: calc(100% - 30px);
+  height: 30px;
+  margin-left: 30px;
+  animation: noteIn 200ms var(--wl-ease) backwards;
+}
+
+@keyframes noteIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* 「查看」在前，图标按钮成一组在后：组内挨着，和「查看」之间稍宽一点。 */
+.actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.actions > :first-child {
+  margin-right: 4px;
+}
+
+/* 这一行没有「移到本会话」时的空位：和小号图标按钮一样大。 */
+.iconSlot {
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+
+/* 次要的图标按钮：平时淡着，悬停时才换成各自的颜色（删除是红）。 */
+.quiet:not(:hover) {
+  color: var(--wl-text-3);
+}
+
+/* 读不出来的状态小标：能点，旁边一个小箭头。 */
+.why {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+  padding: 0 2px 0 0;
+  border: 0;
+  border-radius: calc(999px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-danger);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.why:hover {
+  background: var(--wl-danger-soft);
+}
+
+.why:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+/* 原因：路径或问题清单，等宽字写字段路径。 */
+.reason {
+  display: flex;
+  flex-direction: column;
+  grid-column: 1 / -1;
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: calc(8px * var(--wl-round, 1));
+  background: var(--wl-danger-soft);
+  color: var(--wl-text);
+  font-size: var(--wl-fs-meta);
+  line-height: 1.55;
+  user-select: text;
+}
+
+.reasonPath,
+.reasonList code {
+  color: var(--wl-danger);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-micro);
+  overflow-wrap: anywhere;
+}
+
+.reasonList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--wl-text-2);
+}
+
+.reasonList code {
+  margin-right: 6px;
+}
+
+.reasonMore {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+/* ── 空状态 ────────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px 56px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+  text-align: center;
+}
+
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 6px;
+  border-radius: calc(12px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+}
+
+.emptyTitle {
+  margin: 0;
+  color: var(--wl-text);
+  font-size: var(--wl-fs-body);
+  font-weight: 600;
+}
+
+.emptyText {
+  max-width: 380px;
+  margin: 0 0 6px;
+  line-height: 1.6;
+}
+
+/* ── 存储页 ────────────────────────────────────────────────── */
+
+.page {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+  padding: 16px 16px 20px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+.section {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionTitle {
+  margin: 0;
+  padding: 0 2px;
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-meta);
+  font-weight: 600;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 0 12px;
+  align-items: center;
+  min-height: 60px;
+  padding: 10px 10px 10px 12px;
+}
+
+.item + .item {
+  border-top: 1px solid var(--wl-line);
+}
+
+.itemIcon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: calc(9px * var(--wl-round, 1));
+  background: var(--wl-fill);
+  color: var(--wl-text-2);
+}
+
+.itemIcon[data-tone="accent"] {
+  background: var(--wl-accent-soft);
+  color: var(--wl-accent-text);
+}
+
+.itemIcon[data-tone="warn"] {
+  background: var(--wl-warn-soft);
+  color: var(--wl-warn);
+}
+
+.itemText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.itemTitle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+  font-weight: 600;
+}
+
+.itemValue {
+  color: var(--wl-text-2);
+  font-size: var(--wl-fs-meta);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.itemDesc {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  line-height: 1.5;
+}
+
+.path {
+  color: var(--wl-text);
+  font-family: var(--wl-mono);
+  font-size: var(--wl-fs-meta);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.itemEnd {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.notice {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: calc(8px * var(--wl-round, 1));
+  background: var(--wl-ok-soft);
+  color: var(--wl-ok);
+  font-size: var(--wl-fs-meta);
+  font-weight: 500;
+}
+
+.notice[data-tone="error"] {
+  background: var(--wl-danger-soft);
+  color: var(--wl-danger);
+}
+
+.loading {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--wl-line-strong);
+  border-top-color: var(--wl-accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@container (max-width: 680px) {
+  .runBox {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+  }
+
+  .progress {
+    display: none;
+  }
+}
+
+/* ── 工作流页：左边全部工作流，右边选中那张的版本 ─────────── */
+
+.wfPage {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 236px minmax(0, 1fr);
+  min-height: 0;
+}
+
+/*
+ * 左栏列表：选中底色是一块滑块（motion.tsx 的 ListThumb），换选中时滑过去；
+ * 各项挂上时依次淡入，筛选、增删时留下的项滑到新位置（都在 useFlip 里）。
+ */
+.wfList {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  padding: 10px 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* 项盖在滑块上面；悬停底色画在 ::before 上、渐显。 */
+.wfItem {
+  position: relative;
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 46px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--wl-r-control);
+  background: transparent;
+  color: var(--wl-text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  isolation: isolate;
+}
+
+.wfItem::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--wl-hover);
+  content: "";
+  opacity: 0;
+  transition: opacity 140ms linear;
+  pointer-events: none;
+}
+
+.wfIcon {
+  display: grid;
+  flex: none;
+  color: var(--wl-text-3);
+}
+
+/* 指针移到右端的按钮上，整行还是亮着的。 */
+.wfRow:hover .wfItem:not([aria-current="true"])::before {
+  opacity: 1;
+}
+
+.wfItem[aria-current="true"] {
+  color: var(--wl-accent-text);
+}
+
+.wfItem[aria-current="true"] .wfIcon {
+  color: currentColor;
+}
+
+.wfItem:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -2px;
+}
+
+.wfText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.wfName {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfMeta {
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 正在编辑的那张：名字右边一个小绿点。 */
+.wfDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wl-ok-dot);
+  transition: opacity 120ms linear;
+}
+
+/*
+ * 一行：「改名 / 删除」浮在右端，和小绿点占同一个位置。
+ * 平时按钮透明；悬停、键盘移进来、确认卡开着时浮出来，小绿点淡掉，名字让出按钮那一截。
+ */
+.wfRow {
+  position: relative;
+  flex: none;
+}
+
+.wfActions {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity 120ms linear;
+}
+
+.wfRow:hover .wfActions,
+.wfRow:focus-within .wfActions,
+.wfRow[data-busy="true"] .wfActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.wfRow:hover .wfDot,
+.wfRow:focus-within .wfDot,
+.wfRow[data-busy="true"] .wfDot {
+  opacity: 0;
+}
+
+.wfRow:hover .wfText,
+.wfRow:focus-within .wfText,
+.wfRow[data-busy="true"] .wfText {
+  padding-right: 52px;
+}
+
+.wfAction {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: calc(6px * var(--wl-round, 1));
+  background: transparent;
+  color: var(--wl-text-3);
+  cursor: pointer;
+  transition:
+    transform 120ms var(--wl-ease),
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.wfAction:hover,
+.wfAction[aria-expanded="true"] {
+  background: var(--wl-panel);
+  color: var(--wl-text);
+}
+
+.wfAction[data-danger="true"] {
+  transition:
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.wfAction[data-danger="true"]:hover,
+.wfAction[data-danger="true"][aria-expanded="true"] {
+  background: var(--wl-danger-soft);
+  color: var(--wl-danger);
+}
+
+.wfAction:active {
+  transform: scale(0.92);
+}
+
+.wfAction:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: -1px;
+}
+
+/*
+ * 改名：行的样子不变，只有名字那一行换成一条细输入框（字的位置对齐原来的名字），
+ * 下面一行换成按键提示。整行高度、图标位置都不变。
+ */
+.wfEditing {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+  min-height: 46px;
+  padding: 6px 10px;
+  border-radius: var(--wl-r-control);
+  background: var(--wl-hover);
+}
+
+/* 改名：底线的样子在 ui.module.css 的 `.lineField`；字对齐原来那行名字（外面 -6px、里面 6px 内边距），上下各收进一点，整行不变高。 */
+.wfField {
+  width: calc(100% + 6px);
+  margin: -1.25px 0 -1.25px -6px;
+}
+
+.wfInput {
+  height: 22px;
+  font-weight: 600;
+}
+
+.wfInput::selection {
+  /* 系统的整块深蓝太扎眼：换成半透明的主色，字还是原来的颜色。 */
+  background: color-mix(in srgb, var(--wl-accent) 32%, transparent);
+  color: var(--wl-text);
+}
+
+@media (hover: none) {
+  .wfActions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .wfDot {
+    opacity: 0;
+  }
+
+  .wfText {
+    padding-right: 52px;
+  }
+}
+
+.wfDetail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 14px 16px 18px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+
+/*
+ * 右栏是「标题 + 一张清单」时（运行实例、版本）：整栏不滚，标题、提示条钉在上面，
+ * 只有清单框在框里滚（.scrollBox）。不再给整栏留滚动条的位置，清单框右边和标题栏的按钮齐。
+ */
+.wfDetail.pinned {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+/* 在框里滚的清单框：按内容高，放不下时缩到剩下的高度；滚到头不带着外面的弹窗一起滚。 */
+.scrollBox {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/*
+ * 右栏换了内容（左边换了选中）：标题先浮出来，下面的稍后跟上。
+ * 实例框不整块动——里面的行自己依次浮出（.row）。
+ */
+.paneIn > * {
+  animation: paneIn 260ms var(--wl-ease) backwards;
+}
+
+.paneIn > :not(:first-child) {
+  animation-delay: 50ms;
+}
+
+.paneIn > .runBox {
+  animation: none;
+}
+
+@keyframes paneIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/*
+ * 工作流中心换页：新的一页从点的那一侧滑进来（往右边的页点 → 从右边进）。
+ * 刚打开时不滑（对话框自己有入场）。
+ */
+.pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pane[data-from="right"] {
+  animation: paneFromRight 260ms var(--wl-ease) backwards;
+}
+
+.pane[data-from="left"] {
+  animation: paneFromLeft 260ms var(--wl-ease) backwards;
+}
+
+@keyframes paneFromRight {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+}
+
+@keyframes paneFromLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row,
+  .progressFill,
+  .statusPop,
+  div.statusMenu,
+  button.statusItem,
+  .statusCheck,
+  input.statusNote,
+  .paneIn > *,
+  .pane[data-from] {
+    animation: none;
+  }
+
+  .row[data-leaving="true"] {
+    animation: none;
+    opacity: 0;
+  }
+
+  .row::before,
+  .wfItem::before,
+  .statusButton::before,
+  .statusButton,
+  .statusCaret,
+  .progressFill {
+    transition: none;
+  }
+}
+
+.wfHead {
+  display: flex;
+  flex: none;
+  gap: 12px;
+  align-items: center;
+}
+
+.wfHeadText {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wfTitle {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--wl-fs-title);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfSub {
+  margin: 0;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  font-variant-numeric: tabular-nums;
+}
+
+@container (max-width: 640px) {
+  .wfPage {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+
+/* 瑞士：分组小标题改成加粗、加宽字距的大写小字（见 shell.module.css 的 data-look）。 */
+:global([data-look="swiss"]) .sectionTitle {
+  color: var(--wl-text);
+  font-size: var(--wl-fs-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* 瑞士：成组的列表不再是一只圆角盒子，改成上下两道线（上面一道黑线），行与行之间照旧是细线。 */
+:global([data-look="swiss"]) .box {
+  border-width: 1px 0;
+  border-top-color: var(--wl-text);
+  border-bottom-color: var(--wl-line-strong);
+  background: transparent;
+}
+
+/* 瑞士：分组标题上面压一道黑线。 */
+:global([data-look="swiss"]) .sectionTitle {
+  padding-top: 8px;
+  border-top: 2px solid var(--wl-text);
+}
+
+:global([data-look="swiss"]) .sectionTitle {
+  font-size: var(--wl-fs-body);
+  letter-spacing: 0.02em;
+}

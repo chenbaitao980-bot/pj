@@ -1,0 +1,213 @@
+/**
+ * dsh-workflow-lite — 「执行前填写」对话框。
+ */
+
+.sheet {
+  width: min(560px, 100%);
+}
+
+.headIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: calc(9px * var(--wl-round, 1));
+}
+
+.body {
+  gap: 14px;
+}
+
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--wl-line);
+  border-radius: var(--wl-r-card);
+}
+
+.qHead {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.qIndex {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--wl-circle, 50%);
+  background: var(--wl-ask-soft);
+  color: var(--wl-io-ask);
+  font-size: var(--wl-fs-micro);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  transform: translateY(-1px);
+}
+
+.qText {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--wl-text);
+  font-weight: 600;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.required {
+  flex: none;
+  padding: 0 6px;
+  border-radius: calc(5px * var(--wl-round, 1));
+  background: var(--wl-danger-soft);
+  color: var(--wl-danger);
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.qHint {
+  margin: -2px 0 0 28px;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.area {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pickHint {
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.choice {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--wl-line);
+  border-radius: var(--wl-r-control);
+  background: transparent;
+  color: var(--wl-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms linear;
+}
+
+.choice:hover {
+  background: var(--wl-hover);
+}
+
+.choice:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 1px;
+}
+
+/* 选中：强调色描边 + 浅底，是 ui.fillOn 那层 ::after 渐显。 */
+button.choice::after {
+  inset: -1px;
+  border: 1px solid var(--wl-accent);
+}
+
+/* 「其他」一行：左边是圈 / 方框加字（按钮），右边是自己填的输入框。选中描边同上。 */
+.choice.otherRow::after {
+  inset: -1px;
+  border: 1px solid var(--wl-accent);
+}
+
+.otherRow {
+  cursor: default;
+}
+
+.otherToggle {
+  display: flex;
+  flex: none;
+  gap: 10px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.otherToggle:focus-visible {
+  outline: 2px solid var(--wl-accent);
+  outline-offset: 2px;
+}
+
+.otherInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+}
+
+/*
+ * 输入框就写在这一行里，不再自带一层框：行本身已经是框（选中时描强调色），框里再套框就成了双层。
+ * 聚焦时由整行描强调色示意；写到同一特异度以上，盖过 ui.input 的底色、聚焦描边和瑞士下的底线。
+ */
+.otherRow input.otherInput,
+.otherRow input.otherInput:hover,
+.otherRow input.otherInput:focus {
+  padding: 0 4px;
+  border-color: transparent;
+  background: transparent;
+  outline: none;
+}
+
+.otherRow:has(.otherInput:focus) {
+  border-color: var(--wl-accent);
+}
+
+.choiceText {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.defaultTag {
+  flex: none;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+}
+
+.where {
+  overflow: hidden;
+  color: var(--wl-text-3);
+  font-size: var(--wl-fs-micro);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.missing {
+  color: var(--wl-danger);
+  font-size: var(--wl-fs-micro);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .choice {
+    transition: none;
+  }
+}
+
+/* 瑞士：成块的卡片行只留底线。 */
+:global([data-look="swiss"]) .question {
+  border-width: 0 0 1px;
+  border-color: var(--wl-line-strong);
+}

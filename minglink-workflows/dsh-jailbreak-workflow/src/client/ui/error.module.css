@@ -1,0 +1,154 @@
+/**
+ * dsh-workflow-lite — 崩溃卡：错误边界接住 render 抛错之后显示的那一块。
+ *
+ * 只服务崩溃态，所以完全自包含：不引用别的模块的类名，不复用可能正是崩溃源的组件，也没有入场动画
+ * （界面坏了不该再放一遍动效）。
+ *
+ * 颜色照仓库规矩只用 `--wl-*`，**不带写死的界面色**：每条给一份 `light-dark()` 兜底，兜底值是默认
+ * 两套主题（晴白 / 石板）的对应色。根边界那层的崩溃卡挂在视图根**之外**，那两组内联变量根本没有，
+ * 靠的就是这份兜底——亮档浅底深字、暗档深底浅字，样式全丢了也读得清。
+ * 圆角乘 `--wl-round`（瑞士那套归零）。
+ */
+
+/* 盖满调用方给它的定位盒：画布层、右栏、步骤库都是 `position: absolute` 的一格。 */
+.fill {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  overflow: auto;
+  background: var(--wl-canvas, light-dark(#f1f1f1, #0e1116));
+  color: var(--wl-text, light-dark(#000000, #e9edf3));
+  font-size: var(--wl-fs-body, 13px);
+  line-height: 1.5;
+}
+
+/*
+ * 整张视图那一层：崩溃卡自己当占位。版式跟 `.root` 一致——宿主把视图挂在按内容撑高的 flex 容器里，
+ * 不把 flex-basis 压到 0 会撑出整页滚动。
+ */
+.view {
+  position: relative;
+  display: grid;
+  flex: 1 1 0;
+  place-items: center;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 24px 16px;
+  background: var(--wl-canvas, light-dark(#f1f1f1, #0e1116));
+  color: var(--wl-text, light-dark(#000000, #e9edf3));
+  font-family: var(--dsw-font-family, inherit);
+  font-size: var(--wl-fs-body, 13px);
+  line-height: 1.5;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  width: min(360px, 100%);
+  padding: 20px;
+  text-align: center;
+  background: var(--wl-panel, light-dark(#ffffff, #181c23));
+  border: 1px solid var(--wl-line, light-dark(rgb(0 0 0 / 12%), rgb(226 234 248 / 9%)));
+  border-radius: calc(14px * var(--wl-round, 1));
+  box-shadow: var(--wl-shadow-1, 0 1px 2px rgb(0 0 0 / 8%));
+}
+
+.title {
+  margin: 0;
+  font-size: var(--wl-fs-title, 15px);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.body {
+  margin: 0;
+  color: var(--wl-text-2, light-dark(#383838, #b6bdc9));
+}
+
+.retry {
+  margin-top: 4px;
+  padding: 7px 16px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--wl-accent-on, light-dark(#ffffff, #05132b));
+  background: var(--wl-accent, light-dark(#1750d0, #4d94ff));
+  border: none;
+  border-radius: calc(8px * var(--wl-round, 1));
+  cursor: pointer;
+}
+
+.retry:hover {
+  background: var(--wl-accent-strong, light-dark(#1041ac, #6eaaff));
+}
+
+.retry:focus-visible {
+  outline: 2px solid var(--wl-accent, light-dark(#1750d0, #4d94ff));
+  outline-offset: 2px;
+}
+
+/*
+ * 顶栏那一格（`.top` 是浮在画布上的横向条，高度由内容决定）：崩溃态出一根横条跟着那条排，
+ * 只占顶上一线，不遮住下面的画布——顶栏坏了不该让整块界面跟着消失。
+ */
+.bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 100%;
+  padding: 6px 10px;
+  background: var(--wl-panel, light-dark(#ffffff, #181c23));
+  border: 1px solid var(--wl-line, light-dark(rgb(0 0 0 / 12%), rgb(226 234 248 / 9%)));
+  border-radius: calc(10px * var(--wl-round, 1));
+  box-shadow: var(--wl-shadow-1, 0 1px 2px rgb(0 0 0 / 8%));
+  color: var(--wl-text, light-dark(#000000, #e9edf3));
+  font-size: var(--wl-fs-meta, 12px);
+}
+
+.barTitle {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.barHint {
+  margin: 0;
+  overflow: hidden;
+  color: var(--wl-text-2, light-dark(#383838, #b6bdc9));
+}
+
+.barRetry {
+  flex: none;
+  padding: 3px 10px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--wl-accent-on, light-dark(#ffffff, #05132b));
+  background: var(--wl-accent, light-dark(#1750d0, #4d94ff));
+  border: none;
+  border-radius: calc(8px * var(--wl-round, 1));
+  cursor: pointer;
+}
+
+.barRetry:hover {
+  background: var(--wl-accent-strong, light-dark(#1041ac, #6eaaff));
+}
+
+.barRetry:focus-visible {
+  outline: 2px solid var(--wl-accent, light-dark(#1750d0, #4d94ff));
+  outline-offset: 2px;
+}
+
+/* 瑞士的「形」：直角、无阴影，层级靠一道清楚的线。 */
+:global([data-look="swiss"]) .card,
+:global([data-look="swiss"]) .bar {
+  border-color: var(--wl-line-strong, light-dark(rgb(0 0 0 / 24%), rgb(226 234 248 / 16%)));
+  border-radius: 0;
+  box-shadow: none;
+}
