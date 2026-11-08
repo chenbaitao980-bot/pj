@@ -1,0 +1,22 @@
+{
+  "name": "@local/dsh-multi-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Attach extra workspace roots to one Session so the agent can work across several directories without switching workspaces.",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
+}

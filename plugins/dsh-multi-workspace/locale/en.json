@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Multiple workspaces",
+    "description": "Attaches extra workspace roots to one session so the agent can work across directories by absolute path."
+  }
+}

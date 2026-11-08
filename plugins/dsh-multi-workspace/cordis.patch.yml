@@ -1,0 +1,3 @@
+- insert:
+    - id: multi-workspace
+      name: '@local/dsh-multi-workspace'
