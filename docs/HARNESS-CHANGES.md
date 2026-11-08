@@ -311,3 +311,22 @@ GitNexus MCP 也随之启动，说明整条插件链是活的。
 **方法论教训**：用 `dsh web` 验证冻结版功能时，必须先把 `profiles/desktop` 镜像到 `profiles/web`，否则测的是模板 profile。
 
 同时把插件 manifest 的 `dsh.client` 对齐到已验证可用的 `dsh-plugin-scope` 形状（`inject` 非空、去掉 `immediately`），随 0.2.5-rc.1 重新出货。
+
+## 11. 手机端含量确认
+
+冻结版 payload 里 `dsh-mobile` 是**完整接好的**，不是只放了目录：
+
+```
+依赖      dsh-mobile = file:../../plugins/dsh-mobile
+bundles   包含 dsh-mobile
+插件目录  dsh-home/plugins/dsh-mobile + profile node_modules/dsh-mobile（78 文件 / 70.1 MB）
+```
+
+`verify-install.ps1` 已把 `dsh-mobile` 纳入检查（含 `lib/index.mjs` 入口），payload 现为 **16 passed / 0 failed**。
+
+手机端与桌面共用同一实例，所以三项冻结补丁 + 两个本地插件对手机同样生效；`dsh-mobile` 提供 LAN/隧道接入与移动端布局适配。
+
+## 12. 两个待办/待观察
+
+1. **`Ctrl+;` 只在静态层验证**：补丁标记在包内、bundle `node --check` 通过、调用的是官方 `navigation.forkSession`；但隔离装的 HomeDir 里模型凭据不可用（`apiKeyEnv` 走进程环境变量，复制的 `.credentials.yaml` 不生效），拿不到"已完成轮次"，所以装机态的点验仍缺一次。
+2. **一次莫名的版本跳变**：0.2.5 打包完成后约 2 分钟，payload 三处版本戳被写成 `0.2.6-rc.1`（无对应 exe）。已回退到 `0.2.5-rc.1` 与已出包对齐。原因未查明，后续每次打包后核对 `verify-install` 的版本行即可发现复发。

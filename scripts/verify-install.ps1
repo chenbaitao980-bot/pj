@@ -95,11 +95,11 @@ Check 'profile package.json found' ($null -ne $profileDir) 'looked in dsh-home, 
 if ($profileDir) {
     $profile = ReadJson (Join-Path $profileDir 'package.json')
     $bundles = @($profile.dsh.profile.bundles)
-    foreach ($plugin in @('@local/dsh-toolcall-tone', '@local/dsh-multi-workspace')) {
+    foreach ($plugin in @('@local/dsh-toolcall-tone', '@local/dsh-multi-workspace', 'dsh-mobile')) {
         $registered = $bundles -contains $plugin
         Check ("plugin registered: {0}" -f $plugin) $registered
         $moduleDir = Join-Path $profileDir ('node_modules\' + ($plugin -replace '/', '\'))
-        $entry = if ($plugin -like '*toolcall*') { 'client.js' } else { 'index.js' }
+        $entry = if ($plugin -like '*toolcall*') { 'client.js' } elseif ($plugin -eq 'dsh-mobile') { 'lib\index.mjs' } else { 'index.js' }
         Check ("plugin files: {0}" -f $plugin) (Test-Path (Join-Path $moduleDir $entry)) $moduleDir
     }
 }
