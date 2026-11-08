@@ -202,3 +202,28 @@ robocopy D:\dsh-freeze-new\payload\dsh-home\profiles\desktop $env:DSH_HOME\profi
 **已验证**：页面加载、侧栏、composer、插件弹窗都正常渲染。
 **未通过**：首启的「用户须知 / 预览版说明」两个模态框挡着 composer，点击"继续"后仍有一个 dialog 存在，`/` 打不进去（`editorText` 始终为空）。下一步改成按 dialog 内按钮文本精确定位并逐个确认，或直接清掉对应的 localStorage 标记再 reload。
 **注意**：模态框里有一个按钮会拉起 `platform.deepseek.com` 的 OAuth 授权页（已关闭，未授权）。驱动脚本里要避开这类按钮。
+
+### 7.1 沙箱跑通后的实测结论（2026-11-08）
+
+驱动方式修正：`page.keyboard.type()` 直接打不进 Lexical，必须先 `document.querySelector('[contenteditable=true]').focus()` 再 `keyboard.type`；`locator.click()` 在这个 composer 上不聚焦。
+
+**基线**：全新会话输入 `/` → `role=listbox` 出现，25 条候选（8 条命令 + 17 条技能）。
+
+**开启目标后**：输入 `/goal 长任务测试` 回车 → 目标建立（本轮因缺少模型凭据立即失败 → 显示「已暂停的目标」），随后再输入 `/` →
+
+```
+listboxes: 1   optionCount: 30
+```
+
+**菜单照常弹出，命令和技能都在**。所以"开启目标导致 `/` 不出技能"在干净环境里**不成立**，此前所有代码层假设也全部被证伪：
+
+| 假设 | 结论 |
+|---|---|
+| composerBlock 阻断输入框 | 证伪（无任何插件调用 `set`） |
+| 命令成功后 claim 残留 | 证伪（`onSubmitSettled` 成功必回 plain） |
+| userText 规则 id 冲突 | 证伪（commands 包无该调用） |
+| 目标存在就压死 `/` | 证伪（实测 30 条候选） |
+
+**剩余唯一未测的状态：目标正在跑（会话 busy）时的 `/`。** 沙箱缺 `OPENCODE_GO_API_KEY`，一轮立刻失败，拿不到 running 状态。下一轮在该沙箱里补上凭据（用本机已有 key），让目标真正跑起来，再测 `/`——那条路径对应 `guardOf(phase)` 的 `sending → frozen` 分支，是现在唯一还能解释"按了没反应"的机制。
+
+沙箱凭据不写入仓库，只进 `.harness-sandbox/`（已 gitignore）。
