@@ -144,3 +144,30 @@ const inputBar = renderSlot("conversation.composer.bar", {
 ### 4.4 为什么必须动冻结版
 
 两处都在 `resources/app/dsh/node_modules/@deepseek-ai/` 的已编译 bundle 里，不是插件能覆盖的扩展点（`conversation.composer.bar` 虽是槽位，但 `inert` 计算在宿主组件内部，shadow 槽位拿不到它）。用户已明确授权改冻结版并按规范升版。
+
+### 1.1 修正：claim 不是残留源（已用代码证伪）
+
+`dsh-client-ui-conversation` 的 `onSubmitSettled(ev)`：
+
+```js
+if (ev.ok) {
+  this.phase = "plain";
+  this.claim = void 0;          // 成功结算一定清 claim，回 plain
+  ...
+}
+const text = ev.message ?? ev.outcome?.text;
+this.claim = ev.command;        // 只有失败才把 claim 挂回去
+this.phase = ev.command === void 0 ? "plain" : "claimed";
+```
+
+所以"`/goal` 成功后 chip 一直留着把 `/` 憋死"这个假设**不成立**。剩下两条候选：
+
+- **候选 A（最可能）**：目标在跑时会话一直 busy，`composerBlock !== void 0`，输入框被置为 blocked（占位符变成阻断原因），`/` 根本进不到触发管线。
+  验证方式：目标运行中看输入框是否变灰、占位符是否变成提示语。若是，则"`/` 没反应"是 composer 被阻断，不是菜单 bug。
+- **候选 B**：某条命令**失败**后 claim 挂回、phase 停在 `claimed`，此时 `/` 被 `detectTrigger` 的 `guard.tier === "claimed"` 分支跳过，只有 `@` 还活着。
+
+两种候选的修法不同：A 要放开"目标运行中仍允许发命令"；B 要改 `guardOf`/`detectTrigger` 的 claimed 策略。**在拿到一次现场观察前不动刀**，避免把输入机改坏。
+
+## 5. 规范：本地优先于官方（已写入 AGENTS.md）
+
+官方上游功能与本地冻结版功能冲突时，**保留本地功能**；官方只作增量吸收，不得覆盖或回退本地定制。配套规则：只改 payload、补丁脚本化且可重入、改前快照、改后升版、旧版本一律保留、手机端同步。
