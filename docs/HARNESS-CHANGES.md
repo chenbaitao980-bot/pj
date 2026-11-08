@@ -260,3 +260,33 @@ verify-install → 14 passed, 0 failed   version 0.2.4-rc.1
 原因在源码里：`storedChipTitle = pendingWorkspace?.title ?? (sessionId === void 0 ? void 0 : …)`——**没有 sessionId 时 chip 永远是占位文案**，`inert` 恒为 true，于是 `/` 在这个状态下打不出来（也打不出任何东西）。
 
 这条正好解释了"按 / 没反应"的一个真实可能：**在没有真正会话的首页/空白态按 `/` 本来就不会有菜单**。下一轮要验证：点「新建会话」真正建出空白会话后，chip 是否恢复可用、我们的「不使用工作区」项是否出现并被点得到。
+
+### 9.1 修正：上一节的 hero 失效是测试假象，不是应用 bug
+
+上一节说"全新装完首页 composer 不可聚焦、chip disabled"——**那是被「预览版说明」模态框的遮罩挡住导致的**（`occludedBy: div`、`fixed z=1000`）。我先前只删了 dialog 节点、没删遮罩，于是整页 `receivesEvents:false`。真正把模态框按掉之后：
+
+```
+dialogs: 0   fixed 遮罩: 0
+chip enabled: true   composer focusable: true
+```
+
+所以 hero 态没有失效问题，那条结论作废。
+
+### 9.2 「不使用工作区」在装机版上完整跑通
+
+在隔离装好的 0.2.4-rc.1（52800）上实测：
+
+```
+选择工作区 → 菜单三项：
+  默认工作区
+  不使用工作区          ← 我们的补丁
+  添加工作区…
+
+点「不使用工作区」后：
+  侧栏出现「未分组」分组，新会话建在里面
+  顶部 chip 从「选择工作区」变成 pj（cwd 的 basename，说明 chipTitle 回退生效）
+  composer 可聚焦 = true
+  再打 `/` → 菜单正常弹出（命令 + 技能齐全）
+```
+
+这条把「无工作区新建会话」从"补丁写对了"升级为"装机版真机可用"。
