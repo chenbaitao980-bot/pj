@@ -240,3 +240,23 @@ payload (D:\dsh-freeze-new\payload)          14 passed, 0 failed   version 0.2.4
 ```
 
 已安装那 7 个 FAIL 是**正确结果**——它还是 0.2.2-rc.1 的老包。以后装完 0.2.4-rc.1 再跑一次，应该 14 项全 PASS；跑出 FAIL 就说明包没打对，而不是功能有 bug。
+
+## 9. 0.2.4-rc.1 隔离装机验证
+
+用 payload 的 `install.ps1` 装到 `E:\claude\project4\pj\.install-test`（HomeDir 独立），**没碰当前工作台**：
+
+```
+59783 files / 2284.2 MB
+verify-install → 14 passed, 0 failed   version 0.2.4-rc.1
+```
+
+装出来的实例能正常启动（`dsh web --port 52800`），且 `__FROZEN_NODE__` 占位符已被安装器替换干净——说明安装链路的占位符替换是好的。
+
+**发现一个关键状态**：全新装完、还没真正创建会话时，首页处于「hero」态：
+
+- composer 不可聚焦（`editor.focus()` 返回 false）
+- 「选择工作区」chip `enabled:false / receivesEvents:false`
+
+原因在源码里：`storedChipTitle = pendingWorkspace?.title ?? (sessionId === void 0 ? void 0 : …)`——**没有 sessionId 时 chip 永远是占位文案**，`inert` 恒为 true，于是 `/` 在这个状态下打不出来（也打不出任何东西）。
+
+这条正好解释了"按 / 没反应"的一个真实可能：**在没有真正会话的首页/空白态按 `/` 本来就不会有菜单**。下一轮要验证：点「新建会话」真正建出空白会话后，chip 是否恢复可用、我们的「不使用工作区」项是否出现并被点得到。
