@@ -227,3 +227,16 @@ listboxes: 1   optionCount: 30
 **剩余唯一未测的状态：目标正在跑（会话 busy）时的 `/`。** 沙箱缺 `OPENCODE_GO_API_KEY`，一轮立刻失败，拿不到 running 状态。下一轮在该沙箱里补上凭据（用本机已有 key），让目标真正跑起来，再测 `/`——那条路径对应 `guardOf(phase)` 的 `sending → frozen` 分支，是现在唯一还能解释"按了没反应"的机制。
 
 沙箱凭据不写入仓库，只进 `.harness-sandbox/`（已 gitignore）。
+
+## 8. 装机/打包含量自检
+
+`scripts/verify-install.ps1 -Tree <目录>` 一次核对三类事实：版本戳是否一致、三个冻结补丁标记是否还在、两个本地插件是否注册且文件存在。
+
+实测：
+
+```
+payload (D:\dsh-freeze-new\payload)          14 passed, 0 failed   version 0.2.4-rc.1
+已安装 (…\DeepSeekHarnessFrozen, 0.2.2-rc.1)  7 passed, 7 failed   三个补丁 + 两个插件全部缺失
+```
+
+已安装那 7 个 FAIL 是**正确结果**——它还是 0.2.2-rc.1 的老包。以后装完 0.2.4-rc.1 再跑一次，应该 14 项全 PASS；跑出 FAIL 就说明包没打对，而不是功能有 bug。
