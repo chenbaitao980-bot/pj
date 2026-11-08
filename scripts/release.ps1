@@ -11,20 +11,25 @@
     status    Show installed / payload / shipped versions and existing backups.
     snapshot  Copy the given paths into backup-frozen-<ver>-<stamp> with a
               per-file SHA-256 manifest. Refuses to overwrite an existing one.
+    bump      Stamp a new version into the payload (app manifest, dsh runtime
+              manifest, FROZEN-BUILD.json) before rebuilding. Refuses a version
+              whose Setup.exe is already shipped. Add -Dry to preview.
 
   Examples:
     powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Action status
     powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Action snapshot `
       -Version 0.2.2-rc.1 `
       -Include "C:\Users\Administrator\AppData\Local\Programs\DeepSeekHarnessFrozen\resources\app\dsh\node_modules\@deepseek-ai\dsh-client-ui-conversation\lib\client.js"
+    powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Action bump -Version 0.2.3-rc.1
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('status', 'snapshot')]
+    [ValidateSet('status', 'snapshot', 'bump')]
     [string]$Action = 'status',
 
     [string]$Version = '',
     [string[]]$Include = @(),
+    [switch]$Dry,
 
     [string]$InstallRoot = 'C:\Users\Administrator\AppData\Local\Programs\DeepSeekHarnessFrozen',
     [string]$PayloadRoot = 'D:\dsh-freeze-new\payload',
@@ -159,7 +164,44 @@ function New-Snapshot {
     Write-Host ("          manifest {0}" -f $manifestPath)
 }
 
+function Set-Version {
+    if (-not $Version) { Fail '-Version is required for -Action bump.' }
+    $shipped = Join-Path $Repo ("DeepSeek-Harness-Frozen-Setup-{0}.exe" -f $Version)
+    if (Test-Path $shipped) { Fail "version already shipped: $shipped" }
+
+    $targets = @(
+        @{ path = (Join-Path $PayloadRoot 'resources\app\package.json'); label = 'app' },
+        @{ path = (Join-Path $PayloadRoot 'resources\app\dsh\package.json'); label = 'dsh runtime' },
+        @{ path = (Join-Path $PayloadRoot 'FROZEN-BUILD.json'); label = 'frozen manifest' }
+    )
+
+    $stamp = (Get-Date).ToString('o')
+    foreach ($t in $targets) {
+        if (-not (Test-Path $t.path)) { Fail ("missing " + $t.path) }
+        $raw = Get-Content $t.path -Raw -Encoding UTF8
+        $obj = $raw | ConvertFrom-Json
+        $before = $obj.version
+        $obj.version = $Version
+        if ($t.label -eq 'frozen manifest') { $obj.builtAt = $stamp }
+        $json = $obj | ConvertTo-Json -Depth 12
+        if ($Dry) {
+            Write-Host ("dry      {0,-16} {1} -> {2}" -f $t.label, $before, $Version)
+        }
+        else {
+            Set-Content -Path $t.path -Value $json -Encoding UTF8
+            Write-Host ("bump     {0,-16} {1} -> {2}" -f $t.label, $before, $Version)
+        }
+    }
+
+    if (-not $Dry) {
+        Write-Host ""
+        Write-Host ("next     powershell -ExecutionPolicy Bypass -File frozen-build-src\Build-FrozenSetup.ps1 -PayloadRoot {0} -Version {1} -OutDir {2}" -f $PayloadRoot, $Version, $Repo) -ForegroundColor Cyan
+    }
+}
+
+
 switch ($Action) {
     'status' { Show-Status }
     'snapshot' { New-Snapshot }
+    'bump' { Set-Version }
 }
