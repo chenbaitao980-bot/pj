@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Tool call tones",
+    "description": "Tints MCP and plugin-provided tool calls in the conversation so they read differently from ordinary command execution."
+  }
+}
