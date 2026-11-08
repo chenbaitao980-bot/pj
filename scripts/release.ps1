@@ -104,11 +104,15 @@ function New-Snapshot {
     foreach ($item in $Include) {
         $full = [IO.Path]::GetFullPath($item)
         $leaf = Split-Path $full -Leaf
-        $dest = Join-Path $dir $leaf
+        # Prefix the owning package folder so two packages' client.js cannot collide.
+        $parent = Split-Path $full -Parent
+        $owner = if ($parent) { Split-Path (Split-Path $parent -Parent) -Leaf } else { '' }
+        $storedName = if ($owner) { '{0}--{1}' -f $owner, $leaf } else { $leaf }
+        $dest = Join-Path $dir $storedName
         $n = 1
         while (Test-Path $dest) {
             $n++
-            $dest = Join-Path $dir ("{0}.{1}" -f $leaf, $n)
+            $dest = Join-Path $dir ("{0}.{1}" -f $storedName, $n)
         }
 
         if (Test-Path $full -PathType Container) {
