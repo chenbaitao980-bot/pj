@@ -82,7 +82,7 @@ onCommandSettled(ev) {
 
 ## 2. 其它待做（按落地成本排序）
 
-1. **不用工作区新建对话**：侧栏已存在 `UNGROUPED_KEY` 分组，说明会话可以不属于任何工作区；卡点只在 `conversation.hero.workspace` 强制选择。做法：shadow 该槽位，换成带"不使用工作区"的 picker，并确认 session create 接受空 workspaceId。
+1. **不用工作区新建对话**（已定位到可改的两处，见 §4）
 2. **并行副会话**：用 `subagents` + `conversation.view`/`sidebar.right` 组合，主会话运行时开多个副会话面板。
 3. **多工作区**：会话模型是单 `workspaceId` + 单 `cwd`，需要动 Host 侧会话头与文件作用域，属于改运行时。
 4. **手机端同步**：`mobile/DSH-Remote-*.apk` + `Install-MobilePlugin.ps1`，随冻结版一起升版。
@@ -90,3 +90,57 @@ onCommandSettled(ev) {
 ## 3. 已完成的独立交付
 
 - `@local/dsh-toolcall-tone`：MCP / 插件工具调用独立配色，已安装生效（见 `.trellis/tasks/11-08-mcp-toolcall-highlight/prd.md`）。
+
+## 4. 「不用工作区新建对话」——可行性已用代码坐实
+
+### 4.1 Host 侧已经支持（不需要改）
+
+`dsh-api-session-controller/lib/index.js` 的 `create(request)`：
+
+```js
+if (request.workspaceId !== void 0 && request.cwd !== void 0)
+  throw new RemoteError("gateway/bad-request", "session.create accepts workspaceId or cwd, not both", {});
+let workspace;
+if (request.workspaceId !== void 0) { workspace = this.ctx.workspaceRegistry.get(request.workspaceId); ... }
+const cwd = workspace?.path ?? request.cwd ?? this.defaultCwd;
+```
+
+即：**`session.create` 本来就可以只传 `cwd`、不传 `workspaceId`**（还给了 `defaultCwd` 兜底）。侧栏也早有 `UNGROUPED_KEY` 分组承接不属于任何工作区的会话。所以这不是运行时限制，是纯前端限制。
+
+### 4.2 真正的两道前端闸
+
+**(a) 新建会话的客户端创建路径只发 workspaceId**
+
+`dsh-client-ui-workspace/lib/client.js`：
+
+```js
+return this.createNamed({
+  workspaceId: workspace.workspaceId,
+  ...blank === void 0 ? {} : { sessionId: blank },
+  ...options.agentPreset === void 0 ? {} : { agentPreset: options.agentPreset }
+});
+```
+
+**(b) 没有工作区 chip 时输入框直接 inert**
+
+`dsh-client-ui-conversation/lib/client.js`（ConversationRoot）：
+
+```js
+const inert = sessionId === void 0 || hero && chipTitle === void 0;
+const inputBar = renderSlot("conversation.composer.bar", {
+  variant: hero ? "hero" : "composer",
+  ...inert ? { disabled: true, placeholder: t("placeholder.workspace"), ... } : ...
+});
+```
+
+`chipTitle` 来自选中的 workspace，没有 workspace 就永远 `undefined` → composer 永久 disabled，于是"不添加工作区"在 UI 上无法成立。
+
+### 4.3 落地做法（下一轮）
+
+1. 改 `dsh-client-ui-conversation`：`inert` 判定改为「有 sessionId 且有 cwd 即可输入」，无 workspace 时用 cwd 作为 chip 文案。
+2. 改 `dsh-client-ui-workspace`：`WorkspacePicker` 增加「不使用工作区」项，走 `sessions.create({ cwd })`（cwd 默认取 `defaultCwd`，或经 `ctx.remote.directoryPicker.pick()` 选目录）。
+3. 两处都在 frozen payload 里，按 §0 规则先快照、改完 `-Version 0.2.3-rc.1` 重打包，旧包与快照保留。
+
+### 4.4 为什么必须动冻结版
+
+两处都在 `resources/app/dsh/node_modules/@deepseek-ai/` 的已编译 bundle 里，不是插件能覆盖的扩展点（`conversation.composer.bar` 虽是槽位，但 `inert` 计算在宿主组件内部，shadow 槽位拿不到它）。用户已明确授权改冻结版并按规范升版。
