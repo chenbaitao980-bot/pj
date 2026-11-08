@@ -183,3 +183,22 @@ this.phase = ev.command === void 0 ? "plain" : "claimed";
 - 校验：`node --check` 通过，278631 → 279749 字节。
 
 未做（下一轮）：副会话的并行可见面板（右侧 `sidebarRightTabs` 已确认可按 kind 注册 tab body，`ctx.sidebarRight.openTab(kind)` 可编程打开），以及把副会话回答回灌主会话。
+
+## 7. 可驱动的沙箱宿主（复现 UI 用，已跑通）
+
+桌面端的 web origin 需要 token，外部浏览器进不去；但用 payload 自带的 runtime 起一个**独立实例**就可以：
+
+```powershell
+$env:DSH_HOME='E:\claude\project4\pj\.harness-sandbox'
+robocopy D:\dsh-freeze-new\payload\dsh-home\profiles\desktop $env:DSH_HOME\profiles\web /E
+# 先把沙箱 profile 里 dsh-artex 的 enabled / autoStart 改成 false，避免和正在跑的 ARTEX 抢 8787
+& D:\dsh-freeze-new\payload\resources\runtime\primary-runtime\dependencies\node\bin\node.exe `
+  D:\dsh-freeze-new\payload\resources\app\dsh\node_modules\@deepseek-ai\dsh\lib\bin.js `
+  web --port 52700 --host 127.0.0.1 --no-open
+```
+
+启动行会打印带 token 的地址（`http://127.0.0.1:52700/?token=...`），Tabbit 直接用这个地址就能驱动真实 UI。
+
+**已验证**：页面加载、侧栏、composer、插件弹窗都正常渲染。
+**未通过**：首启的「用户须知 / 预览版说明」两个模态框挡着 composer，点击"继续"后仍有一个 dialog 存在，`/` 打不进去（`editorText` 始终为空）。下一步改成按 dialog 内按钮文本精确定位并逐个确认，或直接清掉对应的 localStorage 标记再 reload。
+**注意**：模态框里有一个按钮会拉起 `platform.deepseek.com` 的 OAuth 授权页（已关闭，未授权）。驱动脚本里要避开这类按钮。
