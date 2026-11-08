@@ -1,0 +1,8 @@
+Phase 1 Analyze: DNS cache eviction. MemoryCache.kt (new), CachingTransport.kt, DnsCache.kt, MemoryCacheTest.kt.
+Phase 2 Plan:
+  Q1: LRU+TTL mixed eviction (A) vs TTL-only (B) vs FIFO (C). Choose A - best balance.
+  Q2: 4 files: MemoryCache.kt + CachingTransport.kt/RealDnsCache.kt + DnsCache.kt + MemoryCacheTest.kt
+  Q3: 7 test cases: eviction, expiration, LRU ordering, re-entrant access, 2x threshold
+Phase 3: MemoryCache with ConcurrentHashMap, LRU via PriorityQueue, 2x maxSize threshold
+Phase 4: Thread safety verified, all callers updated, backward compat
+Phase 5: 4 files, 133+310+251+~50 lines, default maxEntryCount=1000

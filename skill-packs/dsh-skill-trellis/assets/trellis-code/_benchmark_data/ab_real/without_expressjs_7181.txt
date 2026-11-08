@@ -1,0 +1,10 @@
+Change Plan: Restore array parsing for req.query repeated keys
+
+File 1: lib/utils.js - Add arrayLimit:1000 to qs.parse() options (+1 line)
+File 2: test/req.query.js - Add test for 25 repeated keys parsed as array (+13 lines)
+
+Root cause: qs@6.14+ default arrayLimit=20 collapses repeated keys beyond 20 into object
+Fix: set arrayLimit:1000 matches body-parser limit, prevents memory exhaustion
+Edge cases: <=20 unchanged, >1000 still object, complex keys (foo[0][bar]) unaffected
+Tests: new test fails without fix, full req.query suite passes with fix
+Doc: no changes - restores pre-4.22.0 behavior

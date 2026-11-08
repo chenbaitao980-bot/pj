@@ -1,0 +1,10 @@
+Change Plan: Extract :table_name as explicit kwarg in join table helpers
+
+File 1: activerecord/lib/active_record/migration/join_table.rb - DELETE (-16)
+File 2: activerecord/lib/active_record/connection_adapters/abstract/schema_statements.rb - Remove include, add table_name: nil kwarg to 3 methods (+6/-8)
+File 3: activerecord/lib/active_record/migration.rb - Remove autoload (-1)
+File 4: activerecord/lib/active_record/migration/command_recorder.rb - Remove dead include (-1)
+File 5: activerecord/test/cases/migration/schema_definitions_test.rb - Update assertions (+2/-2)
+
+Edge cases: backward compat nil kwarg, symbol vs string, dead code removal safe
+Tests: existing migration tests pass, 2 assertion updates

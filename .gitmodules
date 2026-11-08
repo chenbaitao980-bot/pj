@@ -4,3 +4,6 @@
 [submodule "minglink-workflows/dsh-workflows"]
 	path = minglink-workflows/dsh-workflows
 	url = https://github.com/Minglink/dsh-workflows.git
+[submodule "artex"]
+	path = artex
+	url = https://github.com/jiwoochris/artex-global.git

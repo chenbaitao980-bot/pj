@@ -11,12 +11,18 @@ importers:
       '@xiaoso/dsh-workflow-lite':
         specifier: ^0.9.0
         version: 0.9.0
+      dsh-artex:
+        specifier: link:E:/claude/project4/pj/dsh-artex
+        version: link:../../../../dsh-artex
       dsh-desktop-plugin:
         specifier: ^1.5.12
         version: 1.5.12(@deepseek-ai/schemastery@3.18.5)
       dsh-purge:
         specifier: link:E:/claude/project4/pj/dsh-purge
         version: link:../../../../dsh-purge
+      dsh-tool-websearch:
+        specifier: github:leolee9086/dsh-tool-websearch#v0.1.1
+        version: https://codeload.github.com/leolee9086/dsh-tool-websearch/tar.gz/34a469441721b9a57117197c2c4b4faef1c9512d
 
 packages:
 
@@ -125,6 +131,11 @@ packages:
       '@deepseek-ai/cordis': ^4.0.1-rc.1
       '@deepseek-ai/dsh-tools': '*'
       '@deepseek-ai/schemastery': ^3.18.1
+
+  dsh-tool-websearch@https://codeload.github.com/leolee9086/dsh-tool-websearch/tar.gz/34a469441721b9a57117197c2c4b4faef1c9512d:
+    resolution: {gitHosted: true, integrity: sha512-zUEMUFmwwPTi9z/ovUuRhGCsBgttImMxJeBLCF7pM3yHd0U3tbvatJy8L2TvNx6pdR+KbObSFcOPpYl09VvV6w==, tarball: https://codeload.github.com/leolee9086/dsh-tool-websearch/tar.gz/34a469441721b9a57117197c2c4b4faef1c9512d}
+    version: 0.1.1
+    engines: {node: '>=22.19.0'}
 
   elkjs@0.9.3:
     resolution: {integrity: sha512-f/ZeWvW/BCXbhGEf1Ujp29EASo/lk1FDnETgNKwJrsVvGZhUWCZyg3xLJjAsxfOmt8KjswHmI5EwCQcPMpOYhQ==}
@@ -308,6 +319,8 @@ snapshots:
   dsh-desktop-plugin@1.5.12(@deepseek-ai/schemastery@3.18.5):
     dependencies:
       '@deepseek-ai/schemastery': 3.18.5
+
+  dsh-tool-websearch@https://codeload.github.com/leolee9086/dsh-tool-websearch/tar.gz/34a469441721b9a57117197c2c4b4faef1c9512d: {}
 
   elkjs@0.9.3: {}
 

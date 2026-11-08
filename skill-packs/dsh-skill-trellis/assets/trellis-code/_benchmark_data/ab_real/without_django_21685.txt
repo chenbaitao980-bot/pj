@@ -1,0 +1,8 @@
+Change Plan: Restored BaseFinder.find() in Django staticfiles
+
+File 1: django/contrib/staticfiles/finders.py - Add find() method to BaseFinder with NotImplementedError (+11)
+File 2: tests/staticfiles_tests/test_finders.py - Add TestBaseFinder with test_find and test_list (+14)
+
+Root cause: cleanup removed find() from abstract base, causing AttributeError instead of NotImplementedError
+Edge cases: third-party finders (AttributeError->NotImplementedError, backward compat), super().find() now works
+Tests: 2 new test methods verify NotImplementedError with correct messages

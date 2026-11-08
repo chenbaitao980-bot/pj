@@ -228,3 +228,24 @@ sha256sum "<exe 路径>"
 - **不要**用 CLI 操作 `desktop` profile
 - **不要**把密钥写进 `cordis.patch.yml`，只写环境变量名
 - `--dump-config` 里的 `not found` 分两种：`entry "xxx" not found` 是旧条目（正常），`failed to import` 是真错误
+
+## 十、ARTEX（自主渗透测试系统）
+
+上游 `Autumn-27/ARTEX` 已下线，本仓库固定同源镜像 `jiwoochris/artex-global`（submodule `artex/`），
+插件在 `dsh-artex/`，装法：
+
+```bash
+pwsh -File ./install-artex-plugin.ps1                 # 装进 web profile
+pwsh -File ./install-artex-plugin.ps1 -Profile xxx    # 装进别的 profile
+```
+
+等价于 `dsh plugin --profile web add link:<repo>/dsh-artex`；**重启 profile 才生效**。
+
+工具：`artex_status` / `artex_doctor` / `artex_setup` / `artex_start` / `artex_stop` / `artex_logs`。
+不经过宿主时用 `node dsh-artex/bin/artex-dsh.mjs doctor|setup all|start|status|stop`。
+
+排障要点：
+
+- 构建前端必须 `NEXT_EXPORT=1` 且 `npm ci --include=dev`（否则缺 `@tailwindcss/postcss`）；Windows 下别用 `npm run build:static`，直接调 `next/dist/bin/next`。
+- 数据库是 PostgreSQL：插件在 `artex/.artex-runtime/pg` 自建集群（端口从 55460 起挑），`dsn` 配置可指向现成库。
+- 首次访问 `/setup` 要管理员密码，一次性 setup token 只在启动日志里。

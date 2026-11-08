@@ -1,0 +1,943 @@
+---
+name: trellis-test
+description: "自动生成/更新单元测试 + 回归测试 + 安全审计。分析改动影响、确认测试点、并行生成测试、运行全部测试、失败自动修复 + 重试循环、标记手动验证项。"
+---
+
+# trellis-test — 自动测试生成与验证
+
+**触发**: 输入 `/trellis-test`
+
+---
+
+## Step 0: 检测环境 + 项目类型
+
+### 0a. 工具链检查
+
+确认 codegraph MCP 和 gitnexus MCP 可用。如不可用 → 降级为 `git diff` + 关键词扫描，报告中标明"降级模式"。
+
+### 0b. 检测项目类型
+
+```bash
+_LANG=""; _RUNNER=""; _TEST_DIR=""
+if [ -f pom.xml ]; then _LANG="java"; _RUNNER="maven"; _TEST_DIR="src/test/java"
+elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then _LANG="java"; _RUNNER="gradle"; _TEST_DIR="src/test"
+elif [ -f Cargo.toml ]; then _LANG="rust"; _RUNNER="cargo"; _TEST_DIR="tests"
+elif [ -f go.mod ]; then _LANG="go"; _RUNNER="go"; _TEST_DIR="."
+elif [ -f CMakeLists.txt ]; then _LANG="c"; _RUNNER="ctest"; _TEST_DIR="test"
+elif [ -f package.json ]; then _LANG="node"; _RUNNER="node"; _TEST_DIR=$(ls -d src/__tests__ test tests 2>/dev/null | head -1); _TEST_DIR=${_TEST_DIR:-"tests"}
+elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then _LANG="python"; _RUNNER="python"; _TEST_DIR="tests"
+fi
+
+echo "语言: $_LANG | 运行器: $_RUNNER | 测试目录: $_TEST_DIR"
+```
+
+### 0c. 初始化 .trellis/tests/ 工作区
+
+```bash
+# 创建 trellis 测试工作区
+mkdir -p .trellis/tests/generated
+mkdir -p .trellis/tests/imported
+mkdir -p .trellis/tests/backup
+```
+
+**目录结构**：
+
+```
+.trellis/
+├── tasks/               ← 任务目录（已有）
+├── tests/               ← 测试目录（本技能管理）
+│   ├── generated/       ← 本技能生成/更新的所有测试文件
+│   │   └── <镜像项目目录结构>
+│   ├── imported/        ← 项目已有测试文件快照（首次运行导入）
+│   ├── backup/          ← 同步前的原始文件备份（回滚用）
+│   ├── INDEX.md         ← 测试↔源文件映射索引（核心！按符号名查关联测试）
+│   ├── MANIFEST.md      ← 每次生成的变更清单（回退用）
+│   ├── .affected_symbols  ← 本轮影响分析结果（Step 1b → Step 4b）
+│   └── config.json      ← 项目测试配置（自动生成）
+├── workspace/
+└── spec/
+
+### 0ca. INDEX.md 格式说明（核心索引）
+
+```
+# Test-Source Index
+# 格式: <source_file>::<source_symbol>(<风险>) → <test_path>::<test_method> [<层>]
+
+OrderService.java::OrderService.cancelOrder(HIGH) → java/OrderServiceTest.java::testCancelOrder_Normal [DIRECT]
+OrderService.java::OrderService.cancelOrder(HIGH) → java/RefundControllerTest.java::testRefund_CancelFlow [UPSTREAM]
+```
+
+查询用法（Step 4 用）：
+
+```bash
+# 给定爆炸半径中的符号，查出所有关联测试文件
+awk -F '→' '/OrderService.cancelOrder/ {print $2}' .trellis/tests/INDEX.md | awk -F '::' '{print $1}' | sort -u
+```
+
+### 0d. 首次运行：导入项目已有测试
+
+仅在 `.trellis/tests/imported/` 为空时执行一次：
+
+```bash
+shopt -s nullglob 2>/dev/null
+_IMPORTED=".trellis/tests/imported"
+_TOTAL=0
+
+# 通用扫描：遍历所有可能的标准测试目录
+for _DIR in "src/test/java" "src/test/kotlin" "src/test" \
+            "src/__tests__" "test" "tests" \
+            "src"; do
+    [ -d "$_DIR" ] || continue
+    _LABEL=$(basename "$_DIR")
+    mkdir -p "$_IMPORTED/$_LABEL"
+    find "$_DIR" -type f \( -name "*.java" -o -name "*.kt" -o -name "*.py" \
+        -o -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" \
+        -o -name "*_test.go" -o -name "*.rs" -o -name "*.c" -o -name "*.cpp" \) \
+        -exec cp --parents {} "$_IMPORTED/$_LABEL/" \; 2>/dev/null
+    _COUNT=$(find "$_IMPORTED/$_LABEL" -type f 2>/dev/null | wc -l)
+    echo "  $_LABEL: $_COUNT 个测试文件"
+    _TOTAL=$((_TOTAL + _COUNT))
+done
+
+echo "总计: $_TOTAL 个测试文件已导入"
+```
+
+建立初始 INDEX.md：
+
+```bash
+echo "# Test-Source Index - 导入的已有测试" > .trellis/tests/INDEX.md
+find .trellis/tests/imported -type f | while IFS= read -r f; do
+    _REL="${f#.trellis/tests/}"
+    echo "imported/*::* → $_REL::* [IMPORTED]" >> .trellis/tests/INDEX.md
+done
+```
+
+### 0e. 语言适配配置
+
+写入 `.trellis/tests/config.json`：
+
+```bash
+case "$_RUNNER" in
+  maven)
+    echo '{"runner":"maven","command":"mvn test","test_dir":"src/test/java","cov_cmd":"mvn verify -Pcoverage"}' > .trellis/tests/config.json
+    _SYNC_CMD='[ -d .trellis/tests/generated/java ] && find .trellis/tests/generated/java -type f -exec cp --parents {} src/test/java/ \; 2>/dev/null'
+    ;;
+  gradle)
+    echo '{"runner":"gradle","command":"./gradlew test","test_dir":"src/test","cov_cmd":"./gradlew jacocoTestReport"}' > .trellis/tests/config.json
+    _SYNC_CMD='[ -d .trellis/tests/generated/java ] && find .trellis/tests/generated/java -type f -exec cp {} src/test/ \; 2>/dev/null'
+    ;;
+  cargo)
+    echo '{"runner":"cargo","command":"cargo test","test_dir":"tests","cov_cmd":"cargo tarpaulin"}' > .trellis/tests/config.json
+    _SYNC_CMD='[ -d .trellis/tests/generated/rust ] && cp -r .trellis/tests/generated/rust/* tests/ 2>/dev/null'
+    ;;
+  go)
+    echo '{"runner":"go","command":"go test ./...","test_dir":".","cov_cmd":"go test -coverprofile=coverage.out ./..."}' > .trellis/tests/config.json
+    _SYNC_CMD='[ -d .trellis/tests/generated/go ] && find .trellis/tests/generated/go -name "*_test.go" -exec cp {} . \; 2>/dev/null'
+    ;;
+  ctest)
+    echo '{"runner":"ctest","command":"ctest --output-on-failure","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    _SYNC_CMD='[ -d .trellis/tests/generated/c ] && cp -r .trellis/tests/generated/c/* test/ 2>/dev/null'
+    ;;
+  node)
+    _TEST_DIR=$(ls -d src/__tests__ test tests 2>/dev/null | head -1)
+    echo "{\"runner\":\"node\",\"command\":\"npx jest\",\"test_dir\":\"$_TEST_DIR\",\"cov_cmd\":\"npx jest --coverage\"}" > .trellis/tests/config.json
+    _SYNC_CMD="[ -d .trellis/tests/generated/jest ] && cp -r .trellis/tests/generated/jest/* $_TEST_DIR/ 2>/dev/null"
+    ;;
+  python)
+    _ROOT=$(pwd)
+    echo "{\"runner\":\"python\",\"command\":\"python -m pytest\",\"test_dir\":\"tests\",\"python_paths\":\"$_ROOT\"}" > .trellis/tests/config.json
+    _SYNC_CMD='[ -d .trellis/tests/generated/python ] && cp -r .trellis/tests/generated/python/* tests/ 2>/dev/null'
+    ;;
+esac
+
+echo "同步命令: $_SYNC_CMD"
+```
+
+### 0f. 备份已有测试文件
+
+在首次同步前，备份项目原有测试文件以防覆盖：
+
+```bash
+mkdir -p .trellis/tests/backup/$(date +%Y%m%d_%H%M%S)
+case "$_RUNNER" in
+  maven|gradle) [ -d src/test ] && cp -r src/test .trellis/tests/backup/$(date +%Y%m%d_%H%M%S)/
+  ;;
+  python) [ -d tests ] && cp -r tests .trellis/tests/backup/$(date +%Y%m%d_%H%M%S)/
+  ;;
+  node) for d in src/__tests__ test tests; do [ -d "$d" ] && cp -r "$d" ".trellis/tests/backup/$(date +%Y%m%d_%H%M%S)/"; done
+  ;;
+esac
+echo "备份完成"
+```
+
+### 0g. 生成 → 同步机制
+
+```
+生成测试 → 写入 .trellis/tests/generated/
+        → 备份项目原有同名文件到 .trellis/tests/backup/
+        → 同步到项目标准测试目录
+        → 运行测试 → 报告
+```
+
+---
+
+## Step 1: 影响分析 + 安全审计（MCP 驱动）
+
+### 1a. 获取变更清单
+
+```bash
+# 已跟踪文件的修改
+git diff --name-only HEAD
+# 已暂存但未提交的变更
+git diff --cached --name-only
+# 新增的未跟踪文件
+git status --porcelain | grep '^??' | cut -c4-
+```
+
+记录到 `.trellis/tests/MANIFEST.md`：
+
+```bash
+echo "# 变更来源: $(date '+%Y-%m-%d %H:%M')" > .trellis/tests/.affected_files
+{
+  git diff --name-only HEAD
+  git diff --cached --name-only
+  git status --porcelain | grep '^??' | cut -c4-
+} | sort -u >> .trellis/tests/.affected_files
+```
+
+如果无变更 → 输出"无未提交变更，无需生成测试" → 结束。
+
+### 1b. 符号级影响分析（codegraph + gitnexus）
+
+对每个变更文件，提取变更的类/函数/符号：
+
+```bash
+while IFS= read -r file; do
+  git diff HEAD -- "$file" 2>/dev/null | grep -E '^[+-].*(def |function |class |public |private |protected ).*\('
+done < .trellis/tests/.affected_files
+```
+
+对每个关键符号，调用 MCP 工具做影响分析。**注意**：所有 `codegraph_explore` 调用必须传递 `projectPath` 参数（当前项目根目录）：
+
+#### 第1层 — 变更符号自身（Direct Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 源码定义、签名、入参/出参类型。
+
+#### 第2层 — 上游调用方（Upstream Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 查 callers（d=1）。
+
+#### 第3层 — 下游依赖方（Downstream Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 查 callees（d=1）。
+
+#### 第4层 — 同级关联（Peer Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 查同文件关联符号。
+
+#### 第5层 — 接口契约层（Interface Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 如符号是接口实现，查找同一接口的其他实现。
+
+#### 持久化受影响符号 → 供 Step 4b 使用
+
+```bash
+# 将从 MCP 分析中提取的所有受影响符号写入文件
+# 格式: 每行一个符号名
+cat > .trellis/tests/.affected_symbols << 'SYMBOLS'
+# 由 Step 1b 根据 codegraph + gitnexus 分析结果自动填充
+# 包含: 变更符号本身 + 上游调用方 + 下游依赖方 + 同级关联符号
+SYMBOLS
+
+# 实际写入逻辑：遍历上面 MCP 分析结果，去重写入
+echo "受影响符号已写入 .trellis/tests/.affected_symbols"
+
+# 设置风险等级（根据最高风险符号决定）
+# gitnexus impact 对每个符号返回 HIGH/MEDIUM/LOW
+# 取最高值作为本轮 _RISK_LEVEL
+_RISK_LEVEL="LOW"
+for symbol in "${SYMBOL_LIST[@]}"; do
+  _LEVEL=$(gitnexus_impact_level "$symbol" 2>/dev/null || echo "LOW")
+  case "$_LEVEL" in
+    HIGH) _RISK_LEVEL="HIGH"; break ;;
+    MEDIUM) [ "$_RISK_LEVEL" = "LOW" ] && _RISK_LEVEL="MEDIUM" ;;
+  esac
+done
+export _RISK_LEVEL
+echo "本轮风险等级: $_RISK_LEVEL"
+```
+
+#### 汇总示例
+
+```
+变更符号: OrderService.cancelOrder()
+
+  🟢 直接测试（第1层 — 变更自身）
+     ● cancelOrder() 正常取消 → 退款正确
+     ● cancelOrder() 已发货 → 拒绝
+     ● cancelOrder() 支付超时 → 事务回滚
+
+  🟡 上游回归测试（第2层 — 调用方不受损）
+     ● RefundController.refund() — 调用 cancelOrder
+     ● AdminOrderService.batchCancel() — 批量取消
+
+  🔵 下游回归测试（第3层 — 依赖方行为不变）
+     ● PaymentService.refund() — cancelOrder 调用此方法
+     ● InventoryService.releaseStock() — cancelOrder 调用此方法
+
+  🟣 同级关联测试（第4层 — 共享状态不受影响）
+     ● OrderService.modifyOrder() — 共享 orderRepository
+     ● OrderService.getOrderDetail() — 共享缓存
+
+  ⚪ 接口一致性（第5层 — 如有接口实现）
+     ● 无（cancelOrder 非接口实现）
+```
+
+风险等级（基于 gitnexus impact）：
+- **HIGH** — 影响 3+ 模块 / 核心数据流 / 支付/权限/安全
+- **MEDIUM** — 影响 1-2 个模块 / 常规业务逻辑
+- **LOW** — 仅本文件引用 / 私有方法
+
+### 1c. 按影响域分组
+
+| 域 | 包含 | 测试类型 |
+|------|------|----------|
+| 🔴 **高风险** | HIGH 等级的直接+上游+下游+同级 | 全部生成 |
+| 🟡 **业务逻辑** | MEDIUM 等级的 service/controller/handler | 直接+上游回归 |
+| 🔵 **数据层** | MEDIUM 等级的 model/repository/DAO | 直接测试 |
+| ⚪ **低风险** | LOW 等级的 utils/配置/前端 | 直接测试即可 |
+
+### 1d. 深度安全审计（MCP + 关键词）
+
+**第一层 — 静态扫描**：
+
+```bash
+git diff HEAD | grep -inE '(password|secret|api[_-]?key|token|credential|private_key|-----BEGIN|allowAll|setLenient|disableSsl|ssl.*false)'
+```
+
+**第二层 — 敏感数据流追踪**（codegraph，带 projectPath）：
+
+对静态扫描命中的每处敏感信息，调用 `codegraph_explore`(projectPath: $(pwd)) 追踪数据源和流向。
+
+**第三层 — gitnexus 历史审计**：
+
+查询 gitnexus 获取高风险文件的历史安全修复记录。
+
+---
+
+## Step 2: 确认测试点
+
+呈现测试计划，示例：
+
+```
+╔══════════════════════════════════════╗
+║           测试计划（三层覆盖）        ║
+╚══════════════════════════════════════╝
+
+🔴 高风险域 — OrderService.cancelOrder() (修改)
+  ├─ 🟢 直接测试 (变更自身):
+  │  ● cancelOrder() 正常取消 → 退款正确
+  │  ● cancelOrder() 已发货状态 → 拒绝
+  │  ● cancelOrder() 支付失败 → 事务回滚
+  │  → 已有测试: OrderServiceTest.java (需更新)
+  ├─ 🟡 上游回归测试 (调用方不受损):
+  │  ● RefundController.refund() → 不破坏退款流程
+  │  → 需新增: RefundControllerTest.java
+  ├─ 🔵 下游回归测试:
+  │  ● PaymentService.refund() → 支付退款路径
+  │  → 更新: PaymentServiceTest.java
+  └─ 🟣 同级关联测试:
+     ● OrderService.modifyOrder() → 共享 orderRepository
+     → 新增: OrderServicePeerTest.java
+```
+
+用户回复：
+- `y` — 全部确认，进入 Step 3
+- `<符号名>=no` — 跳过（AI 解析后回显确认）
+- `<符号名>=direct` — 只生成直接测试
+- `<符号名>=add:<测试点>` — 补充测试点
+- `n` — 全部取消，结束
+
+---
+
+## Step 3: 并行生成测试（多子Agent + worktree 隔离）
+
+### 3a. 分配策略
+
+| Agent | 职责 | 输入 | 隔离 |
+|-------|------|------|------|
+| 生成Agent-1 | 高风险模块测试 | symbol impact + 源文件 | worktree |
+| 生成Agent-2 | 业务逻辑测试 | symbol impact + 源文件 | worktree |
+| 生成Agent-3 | 数据层测试 | symbol impact + 源文件 | worktree |
+| 安全Agent | 并行审计报告 | 审计结果 | worktree |
+
+### 3b. Agent prompt 模板
+
+每个生成 Agent 的 prompt 必须包含：
+
+```
+项目类型: {MAVEN/JEST/PYTEST/...}
+测试框架: {JUnit5/Jest/pytest/go test/cargo test/...}
+测试目录: {.trellis/tests/generated/<镜像路径>}
+
+== 第1层 — 变更符号（直接测试） ==
+源文件: {完整源码}
+变更符号: {函数/类列表 + 完整签名}
+
+== 第2层 — 上游调用方（回归测试） ==
+调用方签名: {caller1}, {caller2}
+
+== 第3层 — 下游依赖方（回归测试） ==
+被调用方签名: {callee1}, {callee2}
+
+== 第4层 — 同级关联（回归测试） ==
+同文件关联符号: {peer1}, {peer2}
+
+== 已有测试 ==
+{已有测试文件内容 | 无}
+
+== 任务 ==
+生成四类测试并标注覆盖层:
+1. DIRECT_TESTS — 变更符号本身
+2. UPSTREAM_REGRESSION_TESTS — 每个调用方
+3. DOWNSTREAM_REGRESSION_TESTS — 下游依赖路径
+4. PEER_REGRESSION_TESTS — 同级关联函数
+
+每个测试文件必须包含场景注释头，格式如下（语言对应）：
+
+# Python
+"""
+场景: <功能描述>
+功能: <验证内容>
+对应变更: <符号名> in <源文件名>
+风险等级: <HIGH/MEDIUM/LOW>
+"""
+
+// Java / C / Go / Rust / JS — 对应语言注释格式，字段相同
+
+规则：
+- 写入路径: `.trellis/tests/generated/`，镜像项目源目录结构
+- 命名规范: 遵循各语言惯例
+- 不要覆盖已有不相关测试
+- 每个测试方法必须标注覆盖层:
+  // Layer: DIRECT / UPSTREAM / DOWNSTREAM / PEER
+- 测试文件头部必须包含场景注释头（含“对应变更”字段）
+```
+
+### 3c. 等待与合并 + 更新 INDEX.md + MANIFEST.md
+
+在启动子 Agent 前创建标记文件（解决 `-newer` 时序问题）：
+
+```bash
+touch .trellis/tests/.generation_start
+```
+
+全部 Agent 完成后：
+
+```bash
+shopt -s nullglob 2>/dev/null
+_INDEX=".trellis/tests/INDEX.md"
+_MANIFEST=".trellis/tests/MANIFEST.md"
+_GENERATED_DIR=".trellis/tests/generated"
+```
+
+**更新 INDEX.md** — 遍历生成的测试文件，提取场景注释头：
+
+```bash
+# 用 while + find -print0 安全处理含空格文件名
+find "$_GENERATED_DIR" -type f \( -name "*.java" -o -name "*.kt" -o -name "*.py" \
+    -o -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" \
+    -o -name "*_test.go" -o -name "*.rs" \
+    -o -name "*.c" -o -name "*.cpp" \) -print0 2>/dev/null | \
+while IFS= read -r -d '' testfile; do
+    # 提取场景注释头 — 匹配"对应变更"字段
+    _SOURCE=$(head -30 "$testfile" | grep "对应变更" | sed 's/.*对应变更: \([^ ]*\) in \(.*\)/\2::\1/')
+    [ -z "$_SOURCE" ] && continue
+
+    # 提取覆盖层 — 从文件头部或测试方法注释中匹配 "Layer: XXXX"
+    _LAYER=$(head -30 "$testfile" | grep -iE '(Layer|层)' | grep -oE '(DIRECT|UPSTREAM|DOWNSTREAM|PEER|IMPORTED)' | head -1)
+    _LAYER=${_LAYER:-DIRECT}
+
+    # 提取测试方法名（使用 while read 避免单词拆分）
+    grep -E "^\s+(def test_|void test|it\(|function test|fn test|TEST)" "$testfile" | \
+    while IFS= read -r line; do
+        _METHOD=$(echo "$line" | sed -n 's/.*\(test_\w\+\|test\w\+\)/\1/p' | sed 's/[ (].*//')
+        [ -z "$_METHOD" ] && continue
+        _RELPATH="${testfile#.trellis/tests/}"
+        echo "$_SOURCE → $_RELPATH::$_METHOD [$_LAYER]" >> "$_INDEX"
+    done
+done
+
+# 去重（只排序数据行，保留注释头）
+grep -E '→' "$_INDEX" | sort -u > "$_INDEX.tmp"
+grep -v '→' "$_INDEX" > "$_INDEX.header"
+cat "$_INDEX.header" "$_INDEX.tmp" > "$_INDEX"
+rm -f "$_INDEX.tmp" "$_INDEX.header"
+```
+
+**更新 MANIFEST.md** — 使用标记文件避免 `-newer` 时序问题：
+
+```bash
+echo "# $(date '+%Y-%m-%d %H:%M') - 变更: $(tr '\n' ' ' < .trellis/tests/.affected_files)" >> "$_MANIFEST"
+find "$_GENERATED_DIR" -type f -newer .trellis/tests/.generation_start >> "$_MANIFEST"
+
+# 记录该轮生成的文件数
+echo "# 该轮生成: $(find "$_GENERATED_DIR" -type f -newer .trellis/tests/.generation_start | wc -l) 个文件" >> "$_MANIFEST"
+```
+
+---
+
+## Step 4: 选择测试 + 运行 + 自动修复循环
+
+核心逻辑：
+```
+.affected_symbols（受影响符号列表）→ 查 INDEX.md → 关联测试文件列表 → 只跑这些测试
+```
+
+### 4a. 同步测试文件到项目目录
+
+```bash
+shopt -s nullglob 2>/dev/null
+
+# 备份：同步前备份项目原有测试文件
+_BACKUP_DIR=".trellis/tests/backup/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$_BACKUP_DIR"
+
+# 根据运行器同步
+_RUNNER=$(python3 -c "import json; print(json.load(open('.trellis/tests/config.json')).get('runner',''))" 2>/dev/null || \
+         python -c "import json; print(json.load(open('.trellis/tests/config.json')).get('runner',''))" 2>/dev/null || \
+         echo "")
+
+case "$_RUNNER" in
+  maven)
+    mkdir -p src/test/java
+    [ -f src/test/java/OrderServiceTest.java ] && cp src/test/java/OrderServiceTest.java "$_BACKUP_DIR/" 2>/dev/null
+    find .trellis/tests/generated/java -type f -exec cp {} src/test/java/ \; 2>/dev/null
+    ;;
+  gradle)
+    mkdir -p src/test
+    find .trellis/tests/generated/java -type f -exec cp {} src/test/ \; 2>/dev/null
+    ;;
+  cargo)
+    mkdir -p tests
+    [ -d .trellis/tests/generated/rust ] && cp -r .trellis/tests/generated/rust/* tests/ 2>/dev/null
+    ;;
+  go)
+    find .trellis/tests/generated -name "*_test.go" -exec cp {} . \; 2>/dev/null
+    ;;
+  ctest)
+    mkdir -p test
+    [ -d .trellis/tests/generated/c ] && cp -r .trellis/tests/generated/c/* test/ 2>/dev/null
+    ;;
+  node)
+    _TD=$(ls -d src/__tests__ test tests 2>/dev/null | head -1) || _TD="tests"
+    mkdir -p "$_TD"
+    find .trellis/tests/generated -name "*.test.*" -o -name "*.spec.*" | while IFS= read -r f; do cp "$f" "$_TD/"; done
+    ;;
+  python)
+    mkdir -p tests
+    find .trellis/tests/generated -name "test_*.py" -exec cp {} tests/ \; 2>/dev/null
+    ;;
+esac
+```
+
+### 4b. 爆炸半径 → 查 INDEX.md → 选定测试
+
+```bash
+_INDEX=".trellis/tests/INDEX.md"
+_SYMBOL_FILE=".trellis/tests/.affected_symbols"
+
+# 从 Step 1b 写入的文件读取受影响符号
+AFFECTED_SYMBOLS=()
+while IFS= read -r line; do
+    # 跳过注释和空行
+    [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+    AFFECTED_SYMBOLS+=("$line")
+done < "$_SYMBOL_FILE"
+
+# 如果没有符号记录（首次运行等情况），从受影响文件推断
+if [ ${#AFFECTED_SYMBOLS[@]} -eq 0 ]; then
+    echo "警告: .affected_symbols 为空，尝试从 git diff 推断"
+    while IFS= read -r f; do
+        basename "$f" | sed 's/\.[^.]*$//' >> /tmp/_symbols
+    done < .trellis/tests/.affected_files
+    AFFECTED_SYMBOLS=($(sort -u /tmp/_symbols))
+fi
+
+# 查询 INDEX.md：获取所有关联的测试文件和覆盖层
+declare -A TEST_MAP  # file→layers 映射
+
+for symbol in "${AFFECTED_SYMBOLS[@]}"; do
+    # 用 awk 替代 cut -d'→'（解决 Unicode 分隔符问题）
+    while IFS= read -r match; do
+        [ -z "$match" ] && continue
+        _FILE=$(echo "$match" | awk -F '→' '{print $2}' | awk -F '::' '{print $1}' | tr -d ' ')
+        _LAYER=$(echo "$match" | grep -oE '(DIRECT|UPSTREAM|DOWNSTREAM|PEER|IMPORTED)' | tail -1)
+        [ -z "$_FILE" ] && continue
+        # 累计该文件上的覆盖层（去重）
+        if [ -n "${TEST_MAP[$_FILE]}" ]; then
+            TEST_MAP["$_FILE"]="${TEST_MAP[$_FILE]}:$_LAYER"
+        else
+            TEST_MAP["$_FILE"]="$_LAYER"
+        fi
+    done < <(grep -E "$(printf '%s' "$symbol" | sed 's/[.[\*^$()+?|{}]/\\&/g')" "$_INDEX" 2>/dev/null || true)
+done
+
+# 按风险等级过滤（从 gitnexus 获取当前变更的风险等级）
+_RISK_LEVEL="${_RISK_LEVEL:-HIGH}"  # 默认 HIGH，Step 1b 应设置此值
+
+# 层级过滤规则
+case "$_RISK_LEVEL" in
+  LOW) _ALLOWED_LAYERS="DIRECT" ;;
+  MEDIUM) _ALLOWED_LAYERS="DIRECT|UPSTREAM" ;;
+  HIGH|*) _ALLOWED_LAYERS="DIRECT|UPSTREAM|DOWNSTREAM|PEER" ;;
+esac
+
+# 按层过滤
+SELECTED_TESTS=()
+for _file in "${!TEST_MAP[@]}"; do
+    _layers="${TEST_MAP[$_file]}"
+    # 检查该文件是否有允许的层
+    echo "$_layers" | grep -qE "$_ALLOWED_LAYERS" || continue
+    SELECTED_TESTS+=("$_file")
+done
+
+# 去重
+IFS=$'\n' SELECTED_TESTS=($(printf "%s\n" "${SELECTED_TESTS[@]}" | sort -u))
+unset IFS
+
+echo "=== 测试选择 ==="
+echo "受影响符号: ${AFFECTED_SYMBOLS[*]}"
+echo "风险等级: $_RISK_LEVEL"
+echo "允许的层: $_ALLOWED_LAYERS"
+echo "命中测试文件: ${#SELECTED_TESTS[@]}"
+```
+
+选择规则：
+- 只跑 INDEX.md 中映射到的测试
+- HIGH → 全部层
+- MEDIUM → DIRECT + UPSTREAM
+- LOW → 只跑 DIRECT
+- INDEX.md 为空 → 降级为全量跑项目测试
+- 无命中测试 → 提示并跳过
+
+### 4c. 运行选定测试
+
+```bash
+shopt -s nullglob 2>/dev/null
+
+# 获取运行器类型（尝试 python3 → python → py）
+_PY_CMD="python"
+command -v python3 >/dev/null 2>&1 && _PY_CMD="python3"
+command -v py >/dev/null 2>&1 && _PY_CMD="py -3"
+
+_RUNNER=$("$_PY_CMD" -c "
+import json,sys
+try:
+    print(json.load(open('.trellis/tests/config.json')).get('runner',''))
+except: print('')
+" 2>/dev/null)
+
+# 从 SELECTED_TESTS 提取测试文件列表
+_TEST_FILES=$(printf "%s\n" "${SELECTED_TESTS[@]}" | sort -u)
+
+case "$_RUNNER" in
+  maven)
+    _CLASSES=$(echo "$_TEST_FILES" | sed 's/.*\///;s/\.java//' | tr '\n' ',')
+    mvn test -Dtest="$_CLASSES" -q 2>&1 | tail -20
+    ;;
+  gradle)
+    _CLASSES=$(echo "$_TEST_FILES" | sed 's/.*\///;s/\.\(java\|kt\)//' | tr '\n' ',')
+    ./gradlew test --tests "$_CLASSES" -q 2>&1 | tail -20
+    ;;
+  cargo)
+    cargo test 2>&1 | tail -20
+    ;;
+  go)
+    # Go: 用包路径
+    for _f in $_TEST_FILES; do
+      # 文件已复制到项目根目录，用 go test . 即可
+      go test -v 2>&1 | tail -20
+      break  # 一次 go test . 跑所有本包测试
+    done
+    ;;
+  ctest)
+    ctest --output-on-failure 2>&1 | tail -20
+    ;;
+  node)
+    npx jest $_TEST_FILES --silent 2>&1 | tail -20
+    ;;
+  python)
+    # 读取 PYTHONPATH
+    _PYPATH=$("$_PY_CMD" -c "
+import json,sys
+try:
+    print(json.load(open('.trellis/tests/config.json')).get('python_paths',''))
+except: print('')
+" 2>/dev/null)
+    export PYTHONPATH="${_PYPATH:-$PYTHONPATH}"
+
+    # 收集测试文件路径
+    A_TESTS=(); B_TESTS=(); C_TESTS=()
+    for _f in $_TEST_FILES; do
+      _FULL=$(find tests .trellis/tests -name "$(basename "$_f")" -type f 2>/dev/null | head -1)
+      [ -z "$_FULL" ] && continue
+      if grep -q "sys.exit" "$_FULL" 2>/dev/null; then B_TESTS+=("$_FULL")
+      elif echo "$_f" | grep -qiE "extreme|race|setup_mitm|win_"; then C_TESTS+=("$_FULL")
+      else A_TESTS+=("$_FULL"); fi
+    done
+
+    # A组：pytest 并行（先检查，提示安装而非静默安装）
+    if [ ${#A_TESTS[@]} -gt 0 ]; then
+      if python -m pytest -n auto --help >/dev/null 2>&1; then
+        python -m pytest "${A_TESTS[@]}" -n auto --tb=line -q &
+        A_PID=$!
+      else
+        echo "[提示] 安装 pytest-xdist 可加速: pip install pytest-xdist"
+        python -m pytest "${A_TESTS[@]}" --tb=line -q &
+        A_PID=$!
+      fi
+    fi
+
+    # B组：独立进程（用 PID 追踪替代 jobs -r）
+    B_PIDS=()
+    for f in "${B_TESTS[@]}"; do
+      python "$f" &
+      B_PIDS+=($!)
+      # 控制并发上限
+      while [ ${#B_PIDS[@]} -ge 4 ]; do
+        for pid in "${B_PIDS[@]}"; do
+          kill -0 "$pid" 2>/dev/null || B_PIDS=(${B_PIDS[@]/$pid})
+        done
+        [ ${#B_PIDS[@]} -ge 4 ] && sleep 1
+      done
+    done
+    wait
+
+    # C组：特殊环境串行
+    for f in "${C_TESTS[@]}"; do
+      echo "--- [C] $f ---"
+      python "$f" 2>&1 | tail -3 || echo "[SKIP] $f 需要特殊环境"
+    done
+
+    # 等待 A 组完成
+    [ -n "$A_PID" ] && wait "$A_PID" 2>/dev/null
+    ;;
+  *)
+    echo "未知运行器 ($_RUNNER)，提示用户检查 config.json"
+    ;;
+esac
+```
+
+### 4d. 失败诊断
+
+```bash
+<detected_test_command>
+```
+
+失败分析：
+```
+失败测试: OrderServiceTest.testCancelOrder_Refund()
+失败信息: AssertionError: expected 100.00 but got 99.99
+可能原因:
+  [ ] 测试用例写错
+  [ ] 被测试源码有 bug
+  [ ] 测试环境问题
+```
+
+### 4e. 自动修复循环（最多 3 轮，只重跑失败测试）
+
+```
+round = 1
+MAX_RETRIES = 3
+auto_fix_log = []
+
+while round <= MAX_RETRIES and 有失败:
+  1. 分析每个失败根因，分类：
+     a) 测试写错 → 直接修复测试
+     b) 源码有 bug → 展示 diff 并等用户确认后修复
+     c) 环境问题 → 修复环境配置
+  2. 记录失败测试列表 FAILED_LIST
+  3. 检查工作区是否干净，避免空 stash 报错：
+     git diff --quiet || git stash push -m "fix-before-round-$round"
+  4. 执行修复
+  5. 重跑（只跑 FAILED_LIST 中的测试）
+  6. 记录修复内容到 auto_fix_log
+  round += 1
+```
+
+安全规则：
+- 修改生产代码前展示 diff 并确认
+- 每轮修复失败后：`git stash pop` 恢复 pre-fix 状态（而非 `git checkout -- .`）
+- 全部修复通过后：`git stash drop` 清理临时 stash
+
+### 4f. 验证循环（修复后重索引 + 重跑全量）
+
+```
+all_passed = false
+VERIFY_ROUND = 1
+MAX_VERIFY = 2
+
+while VERIFY_ROUND <= MAX_VERIFY:
+  → Step 3c（更新 INDEX.md，重扫 generated/）
+  → Step 1b（重跑影响分析：修复后的代码可能有新符号）
+  → Step 4b（重新查询 INDEX.md + 层级过滤）
+  → Step 4c（运行全部新选中的测试）
+
+  if 全部通过:
+    all_passed = true
+    break
+  else:
+    → Step 4e（自动修复新失败）
+    if 修复失败:
+      break
+    VERIFY_ROUND += 1
+
+if all_passed:
+  → 继续到 Step 4g/5
+else if VERIFY_ROUND > MAX_VERIFY:
+  → 标记"经过 $MAX_VERIFY 轮验证仍有波动，建议人工介入"
+else:
+  → 标记"验证循环中修复失败，需人工介入"
+```
+
+### 4g. 覆盖率（如框架支持）
+
+```bash
+<coverage_command>
+```
+
+---
+
+## Step 5: 交付报告
+
+```
+╔══════════════════════════════════════╗
+║           trellis-test 报告           ║
+╚══════════════════════════════════════╝
+
+── 影响分析 (codegraph + gitnexus) ──
+  🔴 OrderService.cancelOrder() — 影响 Payment/Notification/Inventory
+     ├─ 🟢 DIRECT: cancelOrder() 自身
+     ├─ 🟡 UPSTREAM: RefundController.refund(), AdminOrderService.batchCancel()
+     ├─ 🔵 DOWNSTREAM: PaymentService.refund(), InventoryService.releaseStock()
+     └─ 🟣 PEER: OrderService.modifyOrder(), getOrderDetail()
+
+── 安全审计 ──
+  ✅ 未发现敏感信息硬编码
+
+── 测试变动 ──
+  新增 (→ .trellis/tests/generated/):
+    ✅ [DIRECT]      java/OrderServiceTest.java — 5 个用例
+    ✅ [UPSTREAM]    java/RefundControllerTest.java — 3 个用例
+  更新:
+    ✅ [DOWNSTREAM]  java/PaymentServiceTest.java — +2 个用例
+
+── 测试结果 ──
+  爆炸半径命中: 5 个符号 → 选定 4 个文件 (14 个用例)
+  选定测试:
+    ✅ java/OrderServiceTest.java — 3/3 通过
+    ✅ java/RefundControllerTest.java — 2/2 通过
+    ✅ java/PaymentServiceTest.java — 4/4 通过
+  选定总计: 14/14 通过 (2.3s)
+  跳过 (不在爆炸半径内): 38 个文件未运行
+  自动修复记录:
+    Round 1: OrderServiceTest 精度断言调整 → PASS
+
+── 需要手动验证 ⚠️ ──
+  □ OrderService.cancelOrder() 外部支付回调
+  □ 数据库迁移脚本
+
+── 回滚 ──
+  /trellis-test rollback   # 回退本次全部变更
+```
+
+---
+
+## 回退机制
+
+### 自动回退（测试修复循环中）
+
+修复循环中如果某轮修复失败 → `git stash pop` 恢复到该轮开始前的状态（保留用户原有的未提交工作）。
+
+### 手动回退
+
+用户执行 `/trellis-test rollback`：
+
+```bash
+_MANIFEST=".trellis/tests/MANIFEST.md"
+_BACKUP_DIR=$(ls -dt .trellis/tests/backup/*/ 2>/dev/null | head -1)
+
+if [ ! -f "$_MANIFEST" ]; then
+    echo "没有找到 MANIFEST.md，无可回退的内容"
+    exit 0
+fi
+
+# 读取 MANIFEST.md，只处理文件路径行（跳过注释和空行）
+grep -vE '^(#|$)' "$_MANIFEST" | while IFS= read -r f; do
+    # 从 generated 中删除
+    rm -f ".trellis/tests/generated/$f" 2>/dev/null
+    # 从项目目录中删除同步副本
+    rm -f "$f" 2>/dev/null
+done
+
+# 恢复备份的原始文件
+if [ -n "$_BACKUP_DIR" ] && [ -d "$_BACKUP_DIR" ]; then
+    cp -r "$_BACKUP_DIR"/* . 2>/dev/null
+    echo "已从 $_BACKUP_DIR 恢复原始文件"
+fi
+
+# 清理本轮 stash（如果有）
+git stash list | grep "fix-before-round" && git stash drop 2>/dev/null
+
+echo "回退完成"
+echo "注意: 自动修复的生产代码变更（如有）需要手动确认，见上方报告中'修复记录'"
+```
+
+### MANIFEST.md 格式
+
+```
+# 2026-07-25 14:00 - 变更: OrderService.java
+src/test/java/OrderServiceTest.java
+src/test/java/RefundControllerTest.java
+```
+
+由 Step 3c 通过 `.generation_start` 标记文件精确维护。
+
+---
+
+## 边界条件处理
+
+| 场景 | 处理 |
+|------|------|
+| **INDEX.md 为空**（首次运行） | 降级为全量跑项目已有测试 |
+| **INDEX.md 有记录但无命中** | 提示"爆炸半径内无关联测试，跳过运行" |
+| **.affected_symbols 为空** | 从 `.affected_files` 回退推断 |
+| **无未提交变更**（含 untracked） | 查 git diff + git status，真无变更才退出 |
+| **测试框架未安装** | 提示安装，给出配置命令 |
+| **用户中途取消** | 已生成的文件保留，结束流程 |
+| **子Agent全部失败** | 汇总失败原因，建议手动生成 |
+| **达到最大重试次数仍有失败** | 保留最后一轮修复，标记需人工介入 |
+| **安全审计发现硬编码密钥** | **阻止继续**，要求先修复安全问题 |
+| **codegraph/gitnexus 不可用** | 降级为 git diff + 关键词扫描，报告标明"降级模式" |
+| **config.json 损坏** | json.load 返回空，fallback 到默认命令 |
+| **语言检测失败** | 提示用户手动配置 config.json |
+| **测试命令失败** | 展示失败输出，提示检查测试框架安装 |
+| **含空格的文件路径** | 所有 find/while/read 使用 `-print0` + `IFS=` 安全处理 |
+| **git stash 无可 stash 内容** | 前置 `git diff --quiet` 检查，无更改则不 stash |
+| **项目无测试目录**（首次） | Step 0e 自动 `mkdir -p` |
+
+## 设计决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 影响分析 | codegraph + gitnexus MCP（带 projectPath） | 符号级准确度远高于文件路径猜 |
+| MCP 降级 | 不可用时降级运行而非退出 | 不阻塞用户工作流 |
+| 安全审计 | 3层（静态+数据流+历史） | 静态漏报率高，数据流能发现隐式传递 |
+| 测试覆盖 | 四层（DIRECT + UPSTREAM + DOWNSTREAM + PEER） | 确保影响范围内所有功能点有防护 |
+| 层级过滤 | Step 4b 按风险等级过滤允许的层 | HIGH 跑全部，LOW 只跑 DIRECT |
+| 测试修复 | 最多3轮，只重跑失败测试 | 缩小反馈循环 |
+| 生产代码修复 | 需用户确认 | 防止 AI 误修业务逻辑 |
+| 验证循环 | 修复后重索引 INDEX.md + 重跑影响分析 | 确保修复后的代码与新 INDEX.md 一致 |
+| INDEX.md 排序 | 数据行排序，注释头保持原位 | 保留可读性 |
+| MANIFEST.md 更新 | 标记文件法（`.generation_start`）而非 `-newer` | 避免时序竞态 |
+| 回滚安全 | scoped 删除 + 备份恢复 + git stash pop | 不丢失用户未提交工作 |
+| 文件路径安全 | `while IFS= read -r` + `-print0` | 支持含空格路径 |
+| Unicode 分隔符 | `awk -F '→'` 替代 `cut -d'→'` | 正确处理多字节字符 |
+| Python 检测 | `python3`→`python`→`py -3` 链式回退 | Windows 兼容 |
+| pip 安装 | 检查已安装，未安装则提示而非静默安装 | 不污染用户环境 |

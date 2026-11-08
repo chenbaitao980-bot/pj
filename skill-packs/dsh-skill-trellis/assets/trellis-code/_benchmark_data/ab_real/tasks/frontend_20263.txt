@@ -1,0 +1,5 @@
+Task: Restrict walking sibling folders when using a pattern
+Repo: tailwindlabs/tailwindcss #20263 (js)
+Files changed: 3 (541 additions, 3 deletions)
+
+Implement this change. Produce a detailed plan with: which files to change, what to change in each, diff summaries, edge cases, test considerations, and documentation updates.

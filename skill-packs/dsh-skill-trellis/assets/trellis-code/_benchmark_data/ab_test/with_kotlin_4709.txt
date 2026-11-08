@@ -1,0 +1,7 @@
+Step 1 Impact Analysis: MutableStateFlow.update/updateAndGet/getAndUpdate in StateFlow.kt
+Step 2 Spec Check: Kotlin @ContractsDsl, @OptIn, contract import
+Step 3 Plan: 1 file, 3 functions
+Step 4: Add import kotlin.contracts.* + @OptIn + contract {} to all 3 functions
+Step 5 Consistency: All 3 covered, tryUpdate also checked
+Step 6 Quality: binary compatible, tests pass
+Step 7 Report: +16 lines, 1 file

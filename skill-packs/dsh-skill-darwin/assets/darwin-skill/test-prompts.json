@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "prompt": "优化 mcp-initiator 这个skill",
+    "expected": "走完整优化循环：基线评估→诊断→改进→验证→人类确认，评分记录到 results.tsv"
+  },
+  {
+    "id": 2,
+    "prompt": "评估所有skills的质量",
+    "expected": "只做评估不改：设计测试prompt→基线评估→展示评分卡，不进入优化循环"
+  },
+  {
+    "id": 3,
+    "prompt": "优化技能 darwin-skill 防止工具使用错误",
+    "expected": "走优化循环，能正确识别skill中的工具调用指令是否写了完整MCP工具名"
+  }
+]

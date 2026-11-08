@@ -1,0 +1,12 @@
+Phase 1 Analyze: 3 functions in StateFlow.kt - update, updateAndGet, getAndUpdate. All use while(true) CAS loop. No existing contracts. No tryUpdate found. Only 1 file affected.
+Phase 2 Plan - Q1方案评估:
+  EXACTLY_ONCE vs AT_LEAST_ONCE
+  EXACTLY_ONCE is a lie - while(true) loop may call function multiple times on CAS failure
+  AT_LEAST_ONCE is factually correct, same smart cast benefits, no dangerous optimizations
+  Risk: EXACTLY_ONCE could cause bad compiler optimizations with side effects
+  Decision: AT_LEAST_ONCE (matches Kotlin stdlib AtomicReference pattern)
+Q2: Only 1 file - StateFlow.kt (not 2 as speculated)
+Q3: gradlew test, contract errors caught at compile time
+Phase 3: Add imports + @OptIn + contract { callsInPlace(function, AT_LEAST_ONCE) } to all 3
+Phase 4: All 3 covered, binary compatible, no runtime impact
+Phase 5: 1 file, ~15 lines, AT_LEAST_ONCE chosen for correctness

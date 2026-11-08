@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "trellis-code Round 2 — 指令具体性优化",
+    "subtitle": "Before → After: 占位符替换规则",
+    "output": "C:/Users/Administrator/.claude/skills/trellis-code/round2-specificity.html"
+  },
+  "lanes": [
+    { "id": "before", "label": "Before (8/10)" },
+    { "id": "after", "label": "After (目标 9/10)" }
+  ],
+  "nodes": [
+    { "id": "prob", "lane": "before", "col": 0, "type": "security", "label": "占位符无警告", "sublabel": "<目标> 在 bash 命令中", "tag": "AI 可能直接执行" },
+    { "id": "fix", "lane": "after", "col": 0, "type": "database", "label": "强制替换规则", "sublabel": "⚠️ 警告 + 明确指令", "tag": "不替换则失败" }
+  ],
+  "edges": [
+    { "from": "prob", "to": "fix", "label": "优化", "variant": "emphasis", "fromSide": "right", "toSide": "left", "route": "drop", "labelSegment": 1, "labelDy": 14 }
+  ],
+  "cards": []
+}

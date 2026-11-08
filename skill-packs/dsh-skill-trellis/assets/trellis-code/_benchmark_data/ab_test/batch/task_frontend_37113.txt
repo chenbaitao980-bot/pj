@@ -1,0 +1,7 @@
+## Task: [Fiber] Don't reaquire HostSingletons during dev effect validation
+Repo: facebook/react
+Files changed (3): ["packages/react-dom/src/__tests__/ReactDOMSingletonComponents-test.js", "packages/react-reconciler/src/ReactFiberCommitWork.js", "packages/react-reconciler/src/ReactFiberWorkLoop.js"]
+Changes: +176/-45
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

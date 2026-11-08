@@ -1,0 +1,7 @@
+## Task: Return 200 for client-handled Server Action redirects
+Repo: vercel/next.js
+Files changed (9): ["docs/01-app/02-guides/redirecting.mdx", "docs/01-app/03-api-reference/04-functions/permanentRedirect.mdx", "docs/01-app/03-api-reference/04-functions/redirect.mdx", "packages/next/src/client/components/redirect.ts", "packages/next/src/server/app-render/action-handler.ts"]
+Changes: +44/-19
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

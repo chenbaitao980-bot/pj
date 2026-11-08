@@ -1,0 +1,6 @@
+# Phase 1: 环境检测
+目标仓库: spring-projects/spring-boot
+目标PR: #51128
+分支: jetty-graceful-shutdown → main
+变更: Use GracefulHandler rather than StatisticsHandler to coordinate graceful shutdown with Jetty
+

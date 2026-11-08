@@ -22,6 +22,26 @@
 | dsh-purge | 已装，配置里可见 | 已装，配置里可见 |
 | workflow-lite | 已装 | 已装 |
 | REA 静态分析 | 已跑通 | — |
+| ARTEX + dsh-artex 插件 | 已拉源码、已编译、已跑通（本轮实测） | — |
+
+## 二·五、ARTEX 怎么起
+
+```powershell
+pwsh -File .\install-artex-plugin.ps1          # 装进 web profile
+# 重启 DSH 后，会话里：artex_setup(action="all") → artex_start
+```
+
+不想动宿主就用命令行：
+
+```powershell
+node dsh-artex\bin\artex-dsh.mjs doctor   # 依赖自检
+node dsh-artex\bin\artex-dsh.mjs start    # 起服务，默认 http://127.0.0.1:8787
+node dsh-artex\bin\artex-dsh.mjs status
+node dsh-artex\bin\artex-dsh.mjs stop
+```
+
+首次访问 `http://127.0.0.1:8787` 会要管理员密码，setup token 在日志里（`artex_logs` 或 `.artex-runtime\artex.log`）。
+数据库是本机 PostgreSQL（插件自建集群，端口从 55460 起自动挑，数据在 `artex\.artex-runtime\pg`）。
 
 ## 三、启动
 
@@ -87,3 +107,6 @@ native 二进制分析需要 Hopper / Ghidra / IDA / JADX 之一，见下方状�
 - **REA native 引擎**：Ghidra 12.1.4 已下载到 `ghidra/`（需要 JDK 21，本机是 17）；Hopper/IDA/JADX 是商业或需单独提供的工具，不在仓库内。
 - **Node 版本**：本机 22.22.2，REA 要求 ≥ 22.23.4，不影响当前使用。
 - **dsh-purge 的 `/purge status`** 只有在点过「应用」之后才有输出，未安装的补丁不会凭空出现。
+- **ARTEX 上游已下线**：`Autumn-27/ARTEX` 已 404，仓库里固定的是同源镜像 `jiwoochris/artex-global`；`artex_setup` 还带 `BaaRai/ARTEX`、`Hinln/ARTEX`、`RuoJi6/ARTEX` 回退，全不通时会提示改用 DITING / antifox 等同能力替代。
+- **ARTEX 依赖 PostgreSQL**：插件会自己在 `artex\.artex-runtime\pg` 建集群（端口从 55460 起自动挑），也可以把 `dsn` 配成现成库；没有 PostgreSQL 工具链时 `artex_doctor` 会明说。
+- **ARTEX 首次访问要设管理员密码**：一次性 setup token 只打在启动日志里，不联网传输。

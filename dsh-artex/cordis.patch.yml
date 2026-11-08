@@ -1,0 +1,14 @@
+# dsh-artex bundle patch
+#
+# 选中这个 bundle 就会插入本插件的入口行；关掉它用 disabled: true。
+# 这里只放默认值，个人覆盖写在 profile 的 cordis.patch.yml 同 id 行里。
+- insert:
+    - id: dsh-artex
+      name: dsh-artex
+      inject: [tools]
+      config:
+        enabled: true
+        addr: 127.0.0.1:8787
+        proxy: 127.0.0.1:8788
+        autoStart: true
+        healthTimeoutMs: 90000

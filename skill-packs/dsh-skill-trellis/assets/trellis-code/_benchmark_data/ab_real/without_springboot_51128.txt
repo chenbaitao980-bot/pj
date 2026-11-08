@@ -1,0 +1,10 @@
+Change Plan: Use GracefulHandler instead of StatisticsHandler for Jetty graceful shutdown
+
+File 1: JettyWebServer.java - Import swap, rename findStatisticsHandler->findGracefulHandler, update createGracefulShutdown with Math.min clamping
+File 2: JettyServletWebServerFactory.java - Import swap, wrap with GracefulHandler
+File 3: JettyReactiveWebServerFactory.java - Same import + wrapping change
+File 4: JettyReactiveWebServerAutoConfigurationTests.java - Update cast type
+
+Edge cases: Shutdown.IMMEDIATE no handler, overflow handled by Math.min, Jetty 12 compat only
+Tests: existing pass + 1 test cast update
+Doc: Javadoc + spring-boot-docs + CHANGELOG

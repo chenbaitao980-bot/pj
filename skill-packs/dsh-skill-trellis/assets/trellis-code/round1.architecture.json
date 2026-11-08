@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "trellis-code Round 1 — 资源整合度优化",
+    "subtitle": "Before (5/10) → After (目标 8/10)",
+    "output": "round1-resource-integration.html"
+  },
+  "components": [
+    { "id": "before-title", "type": "external", "label": "Before", "sublabel": "资源整合度 5/10", "pos": [40, 40], "size": [240, 50] },
+
+    { "id": "prob1", "type": "security", "label": "无路径发现规则", "sublabel": "脚本路径直接硬编码引用", "pos": [40, 130], "size": [240, 60] },
+    { "id": "prob2", "type": "security", "label": "get_context.py 重复调用", "sublabel": "2a/2b 各调用一次, 无缓存", "pos": [40, 230], "size": [240, 60] },
+    { "id": "prob3", "type": "security", "label": "_scripts/ 引用不存在", "sublabel": "目标项目无 _scripts/ 目录", "pos": [40, 330], "size": [240, 60] },
+
+    { "id": "after-title", "type": "backend", "label": "After", "sublabel": "资源整合度目标 8/10", "pos": [400, 40], "size": [240, 50] },
+
+    { "id": "fix1", "type": "database", "label": "路径发现规则 + test -f 守卫", "sublabel": "shared steps 顶部新增规则", "pos": [400, 130], "size": [240, 60] },
+    { "id": "fix2", "type": "database", "label": "输出缓存到 .packages", "sublabel": "2a tee 写入, 2b 读缓存 + ls fallback", "pos": [400, 230], "size": [240, 60] },
+    { "id": "fix3", "type": "database", "label": "修正为 .trellis/scripts/", "sublabel": "增加 test -f 存在性检查", "pos": [400, 330], "size": [240, 60] }
+  ],
+  "connections": [
+    { "from": "prob1", "to": "fix1", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "from": "prob2", "to": "fix2", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "from": "prob3", "to": "fix3", "variant": "emphasis", "fromSide": "right", "toSide": "left" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Round 1 优化范围", "wraps": ["prob1", "prob2", "prob3", "fix1", "fix2", "fix3"] }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Round 1 改动清单",
+      "items": [
+        "新增路径发现规则(shared steps 顶部)",
+        "Step 2a 缓存 get_context.py 输出到 .packages",
+        "Step 2b 读缓存而非重复调用 + ls fallback",
+        "Step 6 _scripts/ → .trellis/scripts/ + test -f",
+        "commit: ea8cd6d"
+      ]
+    }
+  ]
+}

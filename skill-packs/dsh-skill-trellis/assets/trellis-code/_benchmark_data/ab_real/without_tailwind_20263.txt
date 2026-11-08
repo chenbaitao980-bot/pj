@@ -1,0 +1,14 @@
+Change Plan: Restrict walking sibling folders in Tailwind CSS scanner
+
+File 1: crates/oxide/src/scanner/sources.rs
+- Add expand_restricted_patterns() function
+- Identify unrestricted roots (Auto, External, Pattern with **)
+- Inject * ignore-all rule for restricted bases (once per unique base)
+- Inject parent allow-rules for wildcard intermediate folders
+- Wire into pipeline
+
+File 2: crates/oxide/tests/scanner.rs - 8 integration tests
+File 3: CHANGELOG.md - changelog entry
+
+Edge cases: multiple same-base sources, wildcards, unrestricted roots, gitignore, Windows paths
+Tests: unit + integration, verify existing tests pass

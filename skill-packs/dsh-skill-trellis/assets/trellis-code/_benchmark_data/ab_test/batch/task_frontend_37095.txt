@@ -1,0 +1,7 @@
+## Task: [react-server-dom-turbopack] Support Turbopack's experimental array format for chunks
+Repo: facebook/react
+Files changed (6): ["packages/react-server-dom-turbopack/src/client/ReactFlightClientConfigBundlerTurbopack.js", "packages/react-server-dom-turbopack/src/client/ReactFlightClientConfigBundlerTurbopackBrowser.js", "packages/react-server-dom-turbopack/src/client/ReactFlightClientConfigBundlerTurbopackServer.js", "packages/react-server-dom-turbopack/src/client/ReactFlightClientConfigTargetTurbopackServer.js", "packages/react-server-dom-turbopack/src/shared/ReactFlightImportMetadata.js"]
+Changes: +34/-12
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

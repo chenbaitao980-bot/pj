@@ -1,0 +1,5 @@
+Task: Count URL key length in the filesystem route cache LRU
+Repo: vercel/next.js #96229 (ts)
+Files changed: 3 (49 additions, 9 deletions)
+
+Implement this change. Produce a detailed plan with: which files to change, what to change in each, diff summaries, edge cases, test considerations, and documentation updates.

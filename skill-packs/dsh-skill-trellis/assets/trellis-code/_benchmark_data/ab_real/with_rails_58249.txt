@@ -1,0 +1,13 @@
+Phase 1 Analyze: find_join_table_name in schema_statements.rb. 3 methods use it. 5 files affected.
+Phase 2 Plan:
+  Q1: A(explicit kwarg) vs B(no options mutation) vs C(Builder). Choose A - cleanest.
+  Q2: 5 files: schema_statements.rb + join_table.rb(delete) + migration.rb + command_recorder.rb + test
+  Q3: run bundle exec ruby test/cases/migration/schema_definitions_test.rb
+Phase 3 Execute: 
+  schema_statements.rb: table_name:nil kwarg, remove find_join_table_name calls
+  join_table.rb: DELETE entire file (-16)
+  migration.rb: remove autoload
+  command_recorder.rb: remove dead include since 2012
+  test: update assertions (Symbol->String)
+Phase 4 Verify: JoinTable module 3 refs all cleared, backward compat nil default
+Phase 5 Report: 5 files, +8/-28, dead code cleanup win

@@ -1,0 +1,5 @@
+Task: Extract `:table_name` as explicit kwarg in join table helpers
+Repo: rails/rails #58249 (ruby)
+Files changed: 5 (8 additions, 28 deletions)
+
+Implement this change. Produce a detailed plan with: which files to change, what to change in each, diff summaries, edge cases, test considerations, and documentation updates.

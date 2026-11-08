@@ -1,0 +1,2 @@
+# 本项目不在 trellis 管理范围内（spring-projects/spring-boot 外部仓库）
+# 跳过 spec 检查，仅做影响分析和一致性验证

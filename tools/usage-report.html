@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>DSH Token 用量 · 30d</title>
+<style>
+:root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--fg:#e7eaf0;--muted:#8b93a7;--accent:#4F7CFF}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "Microsoft YaHei UI",system-ui,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:24px 20px 60px}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:28px 0 12px;color:var(--muted);font-weight:600}
+.sub{color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:8px;margin:18px 0}.tab{padding:6px 12px;border:1px solid var(--line);border-radius:999px;color:var(--muted);text-decoration:none}
+.tab.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card .k{color:var(--muted);font-size:12px}.card .v{font-size:22px;font-weight:700;margin-top:6px}
+.chart,.pie{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}
+svg{width:100%;height:auto;display:block}.grid{stroke:#262b36;stroke-width:1}.tick{fill:#8b93a7;font-size:11px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px;color:var(--muted);font-size:12px}
+.lg i,.pielegend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.pie{display:flex;gap:16px;align-items:center}.pie svg{width:260px;flex:0 0 260px}
+.pielegend{list-style:none;padding:0;margin:0;flex:1;min-width:220px}
+.pielegend li{display:grid;grid-template-columns:14px 1fr auto auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)}
+.pielegend .k{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pielegend b{font-weight:600}.pielegend .v{color:var(--muted);font-variant-numeric:tabular-nums}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{padding:9px 12px;border-bottom:1px solid var(--line);text-align:left;font-size:13px}
+th{color:var(--muted);font-weight:600;background:#12151b}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.empty{color:var(--muted)}
+</style></head><body><div class="wrap">
+<h1>DeepSeek Harness · Token 用量</h1>
+<div class="sub">数据源 C:\Users\Administrator\.dsh\storages\session_projcache　·　生成于 2026/11/7 21:46:36　·　会话数 12</div>
+<div class="tabs" id="tabs"><a class="tab" href="#" data-range="1h">最近 1h</a><a class="tab" href="#" data-range="6h">最近 6h</a><a class="tab" href="#" data-range="24h">最近 24h</a><a class="tab" href="#" data-range="7d">最近 7d</a><a class="tab on" href="#" data-range="30d">最近 30d</a><a class="tab" href="#" data-range="90d">最近 90d</a><a class="tab" href="#" data-range="1y">最近 1y</a><a class="tab" href="#" data-range="all">总共</a></div>
+<div class="cards">
+  <div class="card"><div class="k">合计 Token</div><div class="v">91.74M</div></div>
+  <div class="card"><div class="k">未缓存输入</div><div class="v">972.3K</div></div>
+  <div class="card"><div class="k">输出</div><div class="v">343.6K</div></div>
+  <div class="card"><div class="k">缓存命中</div><div class="v">90.43M</div></div>
+  <div class="card"><div class="k">会话 / 轮 / 步</div><div class="v">12 / 17 / 334</div></div>
+</div>
+<h2>按时间分布（每天，按厂商堆叠）</h2>
+<div class="chart"><svg viewBox="0 0 980 320" role="img"><line x1="64" y1="274.0" x2="964" y2="274.0" class="grid"/><text x="56" y="278.0" class="tick" text-anchor="end">0</text><line x1="64" y1="209.5" x2="964" y2="209.5" class="grid"/><text x="56" y="213.5" class="tick" text-anchor="end">22.83M</text><line x1="64" y1="145.0" x2="964" y2="145.0" class="grid"/><text x="56" y="149.0" class="tick" text-anchor="end">45.65M</text><line x1="64" y1="80.5" x2="964" y2="80.5" class="grid"/><text x="56" y="84.5" class="tick" text-anchor="end">68.48M</text><line x1="64" y1="16.0" x2="964" y2="16.0" class="grid"/><text x="56" y="20.0" class="tick" text-anchor="end">91.30M</text><text x="78.1" y="290" class="tick" text-anchor="middle">2026-10-08</text><text x="134.3" y="290" class="tick" text-anchor="middle">2026-10-10</text><text x="190.6" y="290" class="tick" text-anchor="middle">2026-10-12</text><text x="246.8" y="290" class="tick" text-anchor="middle">2026-10-14</text><text x="303.1" y="290" class="tick" text-anchor="middle">2026-10-16</text><text x="359.3" y="290" class="tick" text-anchor="middle">2026-10-18</text><text x="415.6" y="290" class="tick" text-anchor="middle">2026-10-20</text><text x="471.8" y="290" class="tick" text-anchor="middle">2026-10-22</text><text x="528.1" y="290" class="tick" text-anchor="middle">2026-10-24</text><text x="584.3" y="290" class="tick" text-anchor="middle">2026-10-26</text><text x="640.6" y="290" class="tick" text-anchor="middle">2026-10-28</text><text x="696.8" y="290" class="tick" text-anchor="middle">2026-10-30</text><text x="753.1" y="290" class="tick" text-anchor="middle">2026-11-01</text><text x="809.3" y="290" class="tick" text-anchor="middle">2026-11-03</text><text x="865.6" y="290" class="tick" text-anchor="middle">2026-11-05</text><rect x="882.6" y="272.8" width="22.1" height="1.2" fill="#4F7CFF"><title>2026-11-06 · opencode-go · 436.6K</title></rect><rect x="910.8" y="16.0" width="22.1" height="258.0" fill="#4F7CFF"><title>2026-11-07 · opencode-go · 91.30M</title></rect><text x="921.8" y="290" class="tick" text-anchor="middle">2026-11-07</text></svg><div class="legend"><span class="lg"><i style="background:#22C55E"></i>(unknown)</span><span class="lg"><i style="background:#4F7CFF"></i>opencode-go</span></div></div>
+<h2>工作区占比</h2>
+<div class="pie"><svg viewBox="0 0 260 260" role="img"><path d="M130,130 L130.0,20.0 A110,110 0 1 1 24.8,97.9 Z" fill="#F59E0B"><title>新建文件夹 · 73.14M · 79.7%</title></path><path d="M130,130 L24.8,97.9 A110,110 0 0 1 126.4,20.1 Z" fill="#EF4444"><title>projectManager-portable · 18.12M · 19.8%</title></path><path d="M130,130 L126.4,20.1 A110,110 0 0 1 129.6,20.0 Z" fill="#A855F7"><title>jd · 436.6K · 0.5%</title></path><path d="M130,130 L129.6,20.0 A110,110 0 0 1 130.0,20.0 Z" fill="#06B6D4"><title>pj · 47.0K · 0.1%</title></path><path d="M130,130 L130.0,20.0 A110,110 0 0 1 130.0,20.0 Z" fill="#EC4899"><title>default-workspace · 0 · 0.0%</title></path></svg><ul class="pielegend"><li><i style="background:#F59E0B"></i><span class="k">新建文件夹</span><b>79.7%</b><span class="v">73.14M</span></li><li><i style="background:#EF4444"></i><span class="k">projectManager-portable</span><b>19.8%</b><span class="v">18.12M</span></li><li><i style="background:#A855F7"></i><span class="k">jd</span><b>0.5%</b><span class="v">436.6K</span></li><li><i style="background:#06B6D4"></i><span class="k">pj</span><b>0.1%</b><span class="v">47.0K</span></li><li><i style="background:#EC4899"></i><span class="k">default-workspace</span><b>0.0%</b><span class="v">0</span></li></ul></div>
+<h2>厂商 / 模型明细</h2>
+<table><thead><tr><th>厂商 / 模型</th><th class="num">未缓存输入</th><th class="num">输出</th><th class="num">缓存命中</th><th class="num">合计</th><th class="num">会话</th></tr></thead><tbody><tr><td>opencode-go/deepseek-v4.1-flash</td><td class="num">972.3K</td><td class="num">343.6K</td><td class="num">90.43M</td><td class="num">91.74M</td><td class="num">9</td></tr><tr><td>(unknown)/(unknown)</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">3</td></tr></tbody></table>
+<script>
+const RANGES = ["1h","6h","24h","7d","30d","90d","1y","all"];
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-range]'); if (!a) return;
+  e.preventDefault();
+  location.hash = a.dataset.range;
+  location.reload();
+});
+if (location.hash) { const r = location.hash.slice(1); if (RANGES.includes(r)) location.search = '?range=' + r; }
+</script>
+</div></body></html>

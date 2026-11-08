@@ -22,6 +22,13 @@ desktop-installer/
 *.log
 rea-test/out.json
 
+# ===== ARTEX 运行期（自测/本地构建产物，不入库）=====
+.artex-runtime/
+.artex-pg/
+.artex-test-home/
+artex/.artex-runtime/
+artex/web/.next/
+
 # ===== DSH 运行时状态与凭据（禁止入库）=====
 deepseek-harness/.dsh/.credentials.yaml
 deepseek-harness/.dsh/.env
@@ -39,3 +46,18 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# ===== 本地代码索引（体积巨大，可重建，不入库）=====
+.codegraph/
+.gitnexus/
+
+# ===== 本地备份快照 =====
+backup-frozen-*/
+
+# ===== 移动端构建产物 =====
+mobile/*.apk
+mobile/*.tgz
+
+# ===== 环境变量备份（可能含密钥）=====
+deepseek-harness/.dsh/.env.bak-*
+.env.bak-*

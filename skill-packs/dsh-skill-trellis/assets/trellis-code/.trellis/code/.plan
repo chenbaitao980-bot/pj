@@ -1,0 +1,33 @@
+## 变更计划
+
+### 修改目标
+恢复 django.contrib.staticfiles.finders.BaseFinder.find() 方法，该方法被过度删除
+（commit a146fe293099d7f860ba13e4b3a571bbda55af22）。
+
+### 方案评估（Q1）
+| 方案 | 复杂度 | 风险 | 选型 |
+|------|--------|------|------|
+| A: 在 BaseFinder 类中恢复 find() 方法 | 低 | 低 — 标准抽象方法定义 | ✅ 最简单 |
+| B: 用 mixin 类提供 find() | 中 | 中 — 需要改继承体系 | ❌ 过度设计 |
+| C: 只在模块级保留兼容 | 低 | 高 — 破坏子类契约 | ❌ 不完整 |
+
+选型理由：方案 A 是原 PR 的实际做法，也是最简方案 —— 在 BaseFinder 中加
+一个 raise NotImplementedError 的 find() 方法，与已有的 list() 一致。
+
+### 连锁影响（Q2）
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| django/contrib/staticfiles/finders.py | 修改 | 在 BaseFinder 类中恢复 find() 方法 |
+| tests/staticfiles_tests/test_finders.py | 修改 | 添加 TestBaseFinder 测试类（Django tests 未包含在 pip 包中） |
+
+### 验证方式（Q3）
+1. ✅ 语法检查 — Python 编译通过
+2. ✅ 导入测试 — from django.contrib.staticfiles.finders import BaseFinder 正常
+3. ✅ 行为测试 — BaseFinder().find("x") → NotImplementedError
+4. ✅ 回归测试 — 子类不受影响
+
+### 不改的范围
+- 不改 BaseStorageFinder / DefaultStorageFinder
+- 不改 FileSystemFinder / AppDirectoriesFinder 的 find() 实现
+- 不改模块级 find() 函数
+- 不改 deprecation 相关内容（RemovedInDjango61Warning）

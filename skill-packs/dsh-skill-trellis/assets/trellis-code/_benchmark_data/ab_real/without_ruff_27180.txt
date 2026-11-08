@@ -1,0 +1,9 @@
+Change Plan: Make with_message_override API future-proof
+
+File 1: crates/ruff_db/src/diagnostic/mod.rs - prepend_info, set_headline_message, clear_concise_message (+18)
+File 2: crates/ty_python_semantic/src/types/context.rs - Move override from into_diagnostic to Drop (+29/-17)
+File 3: crates/ty_python_semantic/src/types/call/bind.rs - Update doc (+2/-2)
+File 4-5: Test snapshots - 7 new info: lines (+7)
+
+Approach: Defer override to Drop time (correct because full diagnostic state known then)
+Edge cases: annotation with/without message, custom concise message, no override

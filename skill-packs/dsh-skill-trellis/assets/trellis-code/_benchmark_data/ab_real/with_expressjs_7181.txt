@@ -1,0 +1,8 @@
+Phase 1 Analyze: parseExtendedQueryString in lib/utils.js, qs.parse with no arrayLimit. 2 files affected.
+Phase 2 Plan:
+  Q1: A(add arrayLimit=1000) vs B(use parameterLimit) vs C(custom parser). Choose A - minimal diff.
+  Q2: 2 files: lib/utils.js + test/req.query.js. No config/doc changes.
+  Q3: test/req.query.js 11/11 pass, full test suite 1323/1324 pass.
+Phase 3 Execute: lib/utils.js +1 line arrayLimit:1000, test/req.query.js +14 line regression test for 25 repeated keys.
+Phase 4 Verify: arrayLimit=1000 matches body-parser, prevents memory exhaustion from sparse arrays. 25 repeated keys now parsed as array.
+Phase 5 Report: 2 files, root cause=qs@6.14 default arrayLimit=20, fix=1 line.

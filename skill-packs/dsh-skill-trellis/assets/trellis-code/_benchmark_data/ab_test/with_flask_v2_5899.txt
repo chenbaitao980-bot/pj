@@ -1,0 +1,14 @@
+Phase 1 Analyze: should_ignore_error in sansio/app.py (base) and app.py (Flask override). 2-3 call sites in app.py. Also docs/api.rst, CHANGES.rst, tests.
+Phase 2 Plan - Q1方案评估:
+  Approach A (add warning + inline callers) vs Approach B (None attribute)
+  Verdict: A is better - migrates callers, more honest deprecation
+Q2: 5 files must change - sansio/app.py, app.py, CHANGES.rst, docs/api.rst, tests
+Q3: pytest tests/ must pass, new deprecation test with pytest.warns, subclass test
+Phase 3 Execute:
+  sansio/app.py: add warnings.warn(DeprecationWarning) to base method
+  app.py: add warning to override + inline call sites with config checks
+  CHANGES.rst: deprecation entry
+  docs/api.rst: .. deprecated:: 3.2 directive
+  tests: test_should_ignore_error_deprecated + test_should_ignore_error_subclass_no_warning
+Phase 4 Verify: No stale refs, data flow identical, mypy ok
+Phase 5 Report: 5 files, +35/-9, scope=10 consistency=9 test=8 doc=9 diff=9

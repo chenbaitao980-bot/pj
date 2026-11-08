@@ -1,0 +1,11 @@
+Phase 1 Analyze: LRU cache in lru-cache.ts + filesystem.ts. 3 files.
+Phase 2 Plan:
+  Q1: A(calculateSize add key param) vs B(hardcode) vs C(closure). Choose A.
+  Q2: 3 files only - LRU signature change, no config/doc sync needed
+  Q3: 26 existing tests + 1 new test + A/B perf test
+Phase 3 Execute:
+  lru-cache.ts: calculateSize signature (value,key) => number
+  lru-cache.test.ts: test key in size calc
+  filesystem.ts: FS_LRU_ENTRY_OVERHEAD, FS_LRU_MAX_SIZE, flatKeyCopy, size includes key+overhead
+Phase 4 Verify: types pass, 26/26 tests, A/B: +79MB(leak) vs +9MB(bounded)
+Phase 5 Report: 3 files, memory leak fixed, V8 string sharing broken

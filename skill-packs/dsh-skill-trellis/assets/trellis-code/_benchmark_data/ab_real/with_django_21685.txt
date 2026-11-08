@@ -1,0 +1,8 @@
+Phase 1 Analyze: BaseFinder.find() in django/contrib/staticfiles/finders.py. 2 files affected (not 5 as initially described).
+Phase 2 Plan:
+  Q1: A(direct restore) vs B(mixin) vs C(module-level compat). Choose A.
+  Q2: finders.py + test_finders.py. No config/docs.
+  Q3: 4 verification items: syntax, import, NotImplementedError, subclass compat.
+Phase 3: Restore find() with NotImplementedError in BaseFinder. Add TestBaseFinder.
+Phase 4: 7 checks all pass. Subclasses unaffected, backward compat.
+Phase 5: 2 files +25 lines. Clean signature find(self, path, find_all=False).

@@ -1,0 +1,5 @@
+JettyWebServer.java|核心类|createGracefulShutdown 方法引用的 handler 类型改变，方法引用 statisticsHandler::getRequestsActive → lambda 调用 gracefulHandler.getCurrentRequestCount() + getCurrentStreamWrapperCount()
+JettyReactiveWebServerFactory.java|工厂|createJettyServer 方法中 StatisticsHandler → GracefulHandler 实例化
+JettyServletWebServerFactory.java|工厂|getWebServer 方法中 StatisticsHandler → GracefulHandler 实例化
+JettyReactiveWebServerAutoConfigurationTests.java|测试|webSocketServerContainerIsAvailableFromServletContext 测试中的强制转换类型
+GracefulShutdown.java|无变更|构造函数签名不变，仍接收 Supplier<Integer>，无需修改

@@ -1,0 +1,29 @@
+{
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "peerDependencies":  {
+                             "@deepseek-ai/cordis":  "^4.0.1"
+                         },
+    "description":  "darwin-skill 技能包：8 维评分 + 爬山法自主优化 SKILL.md，带 git 版本控制与实测验证",
+    "type":  "module",
+    "version":  "1.0.0",
+    "files":  [
+                  "lib",
+                  "assets",
+                  "cordis.patch.yml",
+                  "README.md"
+              ],
+    "name":  "dsh-skill-darwin",
+    "main":  "lib/index.js",
+    "license":  "MIT",
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "dsh-plugins",
+                     "agent-skills",
+                     "skill-pack"
+                 ]
+}

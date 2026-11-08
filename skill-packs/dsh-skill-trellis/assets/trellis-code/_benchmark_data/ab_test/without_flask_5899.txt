@@ -1,0 +1,42 @@
+## Detailed Change Plan: Deprecate `should_ignore_error`
+
+### Background
+should_ignore_error(error) is a method on Flask's Flask (and its sansio App base class). It returns a boolean based on TRAP_HTTP_EXCEPTIONS and TRAP_BAD_REQUEST_ERRORS config keys.
+
+### File 1: src/flask/sansio/app.py
+Add import warnings, add deprecation warning in method body before existing logic:
+```
+def should_ignore_error(self, error):
+    import warnings
+    warnings.warn(
+        "'should_ignore_error' is deprecated and will be removed in Flask 2.4. ...",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    # existing logic unchanged
+```
+
+### File 2: src/flask/app.py
+Find all call sites of self.should_ignore_error() (in handle_exception and handle_user_exception). Replace each call with inlined config check:
+```
+if (
+    self.config.get("TRAP_HTTP_EXCEPTIONS")
+    or (self.config.get("TRAP_BAD_REQUEST_ERRORS") and isinstance(error, BadRequest))
+):
+    raise error
+```
+
+### File 3: CHANGES.rst
+Add deprecation entry under Unreleased/Deprecations section.
+
+### Additional: docs/api.rst, tests/test_*.py
+- docs: add .. deprecated:: 2.4 directive
+- tests: wrap existing tests with pytest.warns(DeprecationWarning) or migrate to config checks
+
+### Edge cases
+- Subclasses overriding: continue to work silently
+- External callers: see DeprecationWarning with guidance
+- Internal callers (Flask itself): migrated to inline checks
+- Concurrent calls: no thread-safety concern
+
+Rough diff: +27/-9 across 3-5 files

@@ -1,0 +1,2872 @@
+---
+name: trellis-test
+description: "自动生成/更新单元测试 + 回归测试 + 安全审计。分析改动影响（codegraph+gitnexus 5层爆炸半径）、确认测试点、并行生成测试（子Agent）、运行全部测试、失败自动修复+重试循环、标记手动验证项。
+触发词：/trellis-test, 跑测试, 生成测试, 测试生成, 回归测试, 测试验证, test generation, run tests, generate tests, regression test, test audit, 自动测试"
+complements:
+  - "**`/goal`**: 在 Step 4e 修复循环中锁定「全部测试必须通过」的目标，防止中途退出"
+  - "**`/darwin-skill`**: 对本技能进行结构+效果双维度优化评估"
+  - "**`trellis-before-dev`**: 读取项目规范后再编码，与本技能配合实现先测后改"
+---
+
+# trellis-test — 自动测试生成与验证
+
+**触发**: 输入 `/trellis-test`
+
+---
+
+## 强制规则（不可违反）
+
+1. **必须按 Step 0→1→2→3→4→5 顺序执行**，不允许跳过任何 Step
+2. Step 0（环境检测）未完成不能进入 Step 1
+3. Step 1b 的 `codegraph_explore` 调用是强制性的——没有跑过 codegraph 生成 `.affected_symbols` 不能进入 Step 2
+4. **Step 2 必须展示完整的测试计划**（含文件路径/场景/爆炸半径/历史回归/Spec清单/优先级），展示后自动进入 Step 3。
+5. Step 3 必须生成至少一个测试文件到 `generated/`，没有测试文件不能进入 Step 4
+6. **Step 4b（DB 反查历史测试+爆炸半径全覆盖验证）是强制 Step**，不能跳过——必须先调用 `test_db.py find` 查 DB 中所有历史关联测试，再验证每个 `affected_symbol` 至少有一个测试覆盖。漏掉的必须进入 Step 3 补充生成
+7. **Step 4b.7（Spec/PRD 合规检查含语义冲突分析）是强制 Step**，不能跳过——必须先由 AI 扫描 `.trellis/spec/` 全目录并判断哪些 spec 与爆炸半径相关（基于项目结构和语义理解，不依赖 bash 关键字匹配），再调用 `test_db.py find-specs` 反查每个测试关联的 spec 规则，然后逐条比对 spec 规则提交时间 vs 变更提交时间并检查约束性关键词，发现冲突必须报告并修复
+8. **Step 4b 和 4b.7 构成原子序列**——Step 4b 查完历史测试后不得插入其他操作，必须立即执行 Step 4b.7 合规检查
+9. **Step 0i 必须验证 spec_rules 表存在**——初始化后检查 `test_index.db` 是否有 `spec_rules` 和 `test_spec_map` 表，缺失则必须重建（`drop-all` + `init`）
+10. **Step 4b.9（测试集桥接汇总）是强制前置**——进入 Step 4c 前必须先展示 SELECTED_TESTS 的分组计数（新生成 vs 历史回归）并确认两组合并运行。AI 不得只跑新生成的文件而跳过历史回归测试。
+11. 每个生成的测试文件**必须包含 `TestedSource:` 和 `TestedCommit:` 标记**
+12. 测试用例**必须符合 Given→When→Then 三段式标准**
+13. 任何违反上述规则的调用均为无效，必须立即中止并提示用户「流程被跳过，请重新 /trellis-test」
+14. AI 不得以"看起来很简单""没必要走流程""时间不够"等理由跳过任意 Step
+14. **测试只能本地运行，严禁上传到服务器**。如果需要服务端依赖（如 OA 的 RecordSet），必须提取为纯逻辑方法并本地测试
+15. **测试文件必须生成到 `.trellis/tests/generated/`**，不得写入项目源目录（如 `src/`）
+16. **测试自动同步：当生产代码变更后，Step 4b.5 必须检测过期测试（TestedCommit ≠ 当前 hash）并自动删除 + 重新生成**，不得仅警告。确保每次跑测试时，测试代码始终基于最新生产代码。
+
+> ⚠️ **违反后果**：如果被用户发现跳过流程，该次 trellis-test 调用视为无效，AI 需要重新按完整流程执行。
+
+---
+
+## 自愈规则（每一步失败都要能恢复）
+
+> **核心原则**：每个 Step 执行完后必须验证输出物是否合法。如果验证失败，必须尝试修复，修复不了才终止。
+
+### 验证清单（每个 Step 完成后强制检查）
+
+| Step | 输出物 | 验证条件 | 失败处理 |
+|------|-------|---------|---------|
+| 0c | `.trellis/tests/` 目录 | 目录存在且可写 | `mkdir -p` 重建 |
+| 0h | `full-init` 执行 | 输出包含 specs/PRDs 注册行 | 重新 `full-init` |
+| 0h | 符号↔测试关系库 | `test_db.py find <symbol>` 能返回历史测试 | 重新 `full-init` |
+| 1a | `.affected_files` | 文件存在且非空（排除注释行） | 提示无变更，终止 |
+| 1b | `.affected_symbols` | 至少 1 个符号 | 回退用 git diff 推断 |
+| 3c | 测试文件头 | 每个文件有 `TestedSource:` 和 `TestedCommit:` | 重新生成测试 |
+| 3c | `INDEX.md` | 至少有 1 条 `→` 索引行 | 重新扫描 `generated/` 重建 |
+| 3c | `MANIFEST.md` | 文件存在 | `touch` 创建 |
+| 3d | 未覆盖符号 | 所有 affected_symbol 至少有一条 INDEX.md 记录 | 自动生成契约测试回填 |
+| 4a | 测试文件同步 | 目标目录有同步的文件 | 重新 cp |
+| 4a.5 | 编译检查 | exit code = 0 | 显示错误，终止 |
+| 4b | DB 历史测试反查 | `test_db.py find` 返回至少 1 个测试文件 | 进入兜底：git 历史自动发现（`test_db.py discover`） |
+| 4b | 爆炸范围覆盖率 | 每个 affected_symbol 在 INDEX.md 至少一条匹配 | 进入 Step 3 补充生成 |
+| 4b.5 | 新鲜度检查 | 每个测试的 TestedCommit 与当前 git hash 一致 | **测试过期 → 自动删除旧测试 + 进入 Step 3 重新生成（非仅警告）** |
+| 4b.5 | 爆炸半径重叠 | 本轮 affected_symbol 在 INDEX.md 有匹配 | 自动将匹配测试加入 SELECTED_TESTS（实现跨次回归） |
+| 4b.7 | Spec/PRD 合规检查 | `test_db.py find-specs` 返回每条 spec 规则，并完成语义冲突分析（时间线比对+约束关键词检查） | 报告冲突并修复测试或更新 spec |
+| 4c | 测试运行 | 测试框架返回结果 | 进入 4e 修复循环 |
+| 5 | 报告 | `report_*.md` 存在且有内容（含结构化表格：总体摘要/爆炸半径/测试结果/spec验证/覆盖缺口/手动验证） | 重新生成 |（含结构化表格：总体摘要/爆炸半径/测试结果/spec验证/覆盖缺口/手动验证） | 重新生成 |
+
+### 编码安全规则（Windows 环境必读）
+
+```bash
+# 所有 Python 文件操作必须显式指定 encoding，禁止依赖默认编码
+# Windows 默认编码是 GBK，但测试文件用 UTF-8，不指定会解码失败
+export PYTHONIOENCODING=utf-8
+python -c "open('file').read()"           # ❌ 可能用 GBK 解码 UTF-8 文件
+python -c "open('file', encoding='utf-8')" # ✅ 强制 UTF-8
+
+# Bash 中读写生成的文件时优先用 Python 而不是 shell 重定向
+# shell 重定向会使用系统编码（Windows=GBK）
+```
+
+## Step 0: 检测环境 + 项目类型
+
+### 0a. 工具链检查 + 运行模式
+
+确认 codegraph MCP 和 gitnexus MCP 可用。如不可用 → 降级为 `git diff` + 关键词扫描，报告中标明"降级模式"。
+
+
+
+### 0b. 检测项目类型
+
+```bash
+_LANG=""; _RUNNER=""; _TEST_DIR=""; _EXT=""
+# 优先级1: 标准构建文件检测（精确匹配已知项目类型）
+if [ -f pom.xml ]; then _LANG="java"; _RUNNER="maven"; _TEST_DIR="src/test/java"
+elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then
+    if grep -qi "com\.android" build.gradle* 2>/dev/null; then _LANG="android"; _RUNNER="gradle"; _TEST_DIR="src/test"
+    else _LANG="java"; _RUNNER="gradle"; _TEST_DIR="src/test"; fi
+elif [ -f Cargo.toml ]; then _LANG="rust"; _RUNNER="cargo"; _TEST_DIR="tests"
+elif [ -f go.mod ]; then _LANG="go"; _RUNNER="go"; _TEST_DIR="."
+elif [ -f CMakeLists.txt ]; then _LANG="c"; _RUNNER="ctest"; _TEST_DIR="test"
+elif [ -f package.json ]; then
+    _TEST_DIR=$(ls -d src/__tests__ test tests 2>/dev/null | head -1); _TEST_DIR=${_TEST_DIR:-"tests"}
+    _HAS_VUE=$(python -c "import json; d=json.load(open('package.json')); print('vue' in d.get('dependencies',{}) or 'vue' in d.get('devDependencies',{}))" 2>/dev/null)
+    _HAS_REACT=$(python -c "import json; d=json.load(open('package.json')); print('react' in d.get('dependencies',{}) or 'react' in d.get('devDependencies',{}))" 2>/dev/null)
+    if [ "$_HAS_VUE" = "True" ]; then _LANG="vue"; _RUNNER="vitest"
+    elif [ "$_HAS_REACT" = "True" ]; then _LANG="react"; _RUNNER="vitest"
+    else _LANG="node"; _RUNNER="jest"; fi
+elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then _LANG="python"; _RUNNER="pytest"; _TEST_DIR="tests"
+
+# 优先级2: 源文件扩展名检测（根据实际代码文件推断语言和运行器）
+# 映射表: 扩展名 → 语言,运行器,测试目录
+else
+    for _TRY in \
+        "vue:vitest:tests" "tsx:vitest:tests" "jsx:vitest:tests" \
+        "kt:kotlin:src/test" "swift:swift:tests" \
+        "dart:dart:test" "ts:node:tests" "js:node:tests" \
+        "php:php:tests" "rb:ruby:tests" "cs:dotnet:tests" \
+        "vb:dotnet:tests" "go:go:tests" "rs:cargo:tests" \
+        "c:ctest:test" "cpp:ctest:test" "h:h:" "hpp:hpp:" \
+        "scala:scala:src/test" "ex:elixir:test" "erl:erlang:test" \
+        "hs:ghc:test" "clj:clojure:test" "lua:lua:test" \
+        "r:Rscript:test" "pl:perl:t" "sh:bash:tests" "ps1:powershell:tests" \
+        "py:pytest:tests" "java:None:src/test" "html:node:."; do
+        _EXT="${_TRY%%:*}"
+        _RUNNER_CAND="${_TRY#*:}"; _RUNNER_CAND="${_RUNNER_CAND%%:*}"
+        _DIR_CAND="${_TRY##*:}"
+        # 检查该扩展名的文件是否存在（find 自身 exit=0 即使无匹配，需用 grep -q 判断是否有输出）
+        if find . -maxdepth 1 -name "*.$_EXT" 2>/dev/null | grep -q . || find src/ -maxdepth 5 -name "*.$_EXT" 2>/dev/null | grep -q .; then
+            _LANG="$_EXT"; _RUNNER="$_RUNNER_CAND"; _TEST_DIR="$_DIR_CAND"
+            echo "  [DETECT] 源文件类型: .$_EXT（根据源文件扩展名推断）"
+            break
+        fi
+    done
+fi
+
+# 优先级3: 最终通用回退——什么都不匹配时
+if [ -z "$_LANG" ]; then
+    echo "  [WARN] 无法通过构建文件或源文件扩展名检测项目类型"
+    echo "  [INFO] 将使用通用模式：按文件类型生成自包含测试，手动运行"
+    _LANG="generic"; _RUNNER="generic"; _TEST_DIR="."
+fi
+
+echo "语言: $_LANG | 运行器: $_RUNNER | 测试目录: $_TEST_DIR"
+
+# 平台检测（影响测试生成和断言）
+_OS_PLATFORM="unknown"
+case "$(uname -s)" in
+    Linux*)   _OS_PLATFORM="linux" ;;
+    Darwin*)  _OS_PLATFORM="macos" ;;
+    CYGWIN*|MINGW*|MSYS*) _OS_PLATFORM="windows" ;;
+esac
+_PY_VERSION=$(python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "?")
+echo "  平台: $_OS_PLATFORM | Python: $_PY_VERSION | 路径分隔符: $(python -c "import os; print(os.sep)" 2>/dev/null)"
+echo "  ⚠️  测试生成将考虑平台差异: path sep=$(python -c "import os; print(repr(os.sep))" 2>/dev/null), linesep=$(python -c "import os; print(repr(os.linesep))" 2>/dev/null)"
+```
+
+### 0c. 依赖安装检测（Python 项目）
+
+> 在初始化工作区之前，检查项目的 Python 依赖是否已安装。避免 Step 4c 因缺少依赖直接失败。
+
+```bash
+_LANG_DETECTED=$_LANG  # 来自 Step 0b 的语言检测结果
+case "$_LANG_DETECTED" in
+  python|pytest)
+    _REQ_FILES=""
+    [ -f requirements.txt ] && _REQ_FILES="requirements.txt"
+    [ -f pyproject.toml ] && _REQ_FILES="$REQ_FILES pyproject.toml"
+    [ -f setup.py ] && _REQ_FILES="$REQ_FILES setup.py"
+    [ -f setup.cfg ] && _REQ_FILES="$REQ_FILES setup.cfg"
+    
+    if [ -n "$_REQ_FILES" ]; then
+        echo "  [依赖] 检测到: $_REQ_FILES"
+        # 快速检查核心依赖是否已安装（不运行完整 pip install）
+        if python -c "import pytest" 2>/dev/null; then
+            echo "  [依赖] pytest 已安装 ✅"
+        else
+            echo "  [依赖] pytest 未安装，尝试安装..."
+            pip install pytest 2>&1 | tail -1 || echo "  [WARN] pip install 失败，测试需手动安装依赖"
+        fi
+        
+        # 检查项目自身是否可导入
+        _PKG_NAME=$(python -c "import tomllib,json; d=tomllib.load(open('pyproject.toml','rb')); print(d.get('project',{}).get('name',''))" 2>/dev/null || echo "")
+        if [ -n "$_PKG_NAME" ] && python -c "import $_PKG_NAME" 2>/dev/null; then
+            echo "  [依赖] $_PKG_NAME 已安装 ✅"
+        elif [ -n "$_PKG_NAME" ]; then
+            echo "  [依赖] $_PKG_NAME 未安装，尝试 pip install -e ."
+            pip install -e . 2>&1 | tail -1 || echo "  [WARN] 安装失败，测试可能因缺少依赖失败"
+        fi
+    else
+        echo "  [依赖] 未检测到依赖文件，跳过安装检查"
+    fi
+    ;;
+  node|vue|react)
+    if [ -f package.json ] && ! [ -d node_modules ]; then
+        echo "  [依赖] node_modules 不存在，运行 npm install..."
+        npm install --silent 2>&1 | tail -3 || echo "  [WARN] npm install 失败"
+    elif [ -d node_modules ]; then
+        echo "  [依赖] node_modules 已存在 ✅"
+    fi
+    ;;
+  java|maven|gradle)
+    if command -v mvn >/dev/null 2>&1; then
+        echo "  [依赖] Maven 可用 ✅"
+    elif command -v gradle >/dev/null 2>&1; then
+        echo "  [依赖] Gradle 可用 ✅"
+    else
+        echo "  [WARN] 未检测到 Maven/Gradle，编译检查可能失败"
+    fi
+    ;;
+  *)
+    echo "  [依赖] $_LANG_DETECTED 项目: 跳过依赖检查"
+    ;;
+esac
+```
+
+### 0d. 初始化 .trellis/tests/ 工作区
+
+```bash
+# 创建 trellis 测试工作区（包含按月存储的generated目录）
+_MONTH_DIR=$(date +%Y/%m)
+mkdir -p .trellis/tests/generated/$_MONTH_DIR
+mkdir -p .trellis/tests/imported
+mkdir -p .trellis/tests/backup
+mkdir -p .trellis/scripts
+_ACTIVE_GEN_DIR=".trellis/tests/generated/$_MONTH_DIR"
+echo "  [目录] 本月测试输出: $_ACTIVE_GEN_DIR"
+
+# 复制报告脚本和 DB 脚本到项目 .trellis/scripts/
+_SELF_DIR=".claude/skills/trellis-test"
+for _script in test_report.py test_db.py; do
+    if [ -f "$_SELF_DIR/$_script" ]; then
+        cp "$_SELF_DIR/$_script" ".trellis/scripts/$_script" 2>/dev/null
+        echo "  [脚本] $_script 已就绪"
+    fi
+done
+```
+
+**目录结构**：
+
+```
+.trellis/
+├── tasks/               ← 任务目录（已有）
+├── tests/               ← 测试目录（本技能管理）
+│   ├── generated/       ← 本技能生成/更新的所有测试文件（按月归档）
+│   │   ├── 2026/07/     ← 2026年7月生成的测试
+│   │   ├── 2026/08/     ← 2026年8月生成的测试
+│   │   └── ...          ← 每月自动新建目录
+│   ├── imported/        ← 项目已有测试文件快照（首次运行导入）
+│   ├── backup/          ← 同步前的原始文件备份（回滚用）
+│   ├── INDEX.md         ← 测试↔源文件映射索引（核心！按符号名查关联测试）
+│   ├── MANIFEST.md      ← 每次生成的变更清单（回退用）
+│   ├── .affected_symbols  ← 本轮影响分析结果（Step 1b → Step 4b）
+│   └── config.json      ← 项目测试配置（自动生成）
+├── workspace/
+└── spec/
+
+### 0ca. INDEX.md 格式说明（核心索引）
+
+```
+# Test-Source Index
+# 格式: <source_file>::<source_symbol>(<风险>) → <test_path>::<test_method> [<层>]
+
+OrderService.java::OrderService.cancelOrder(HIGH) → java/OrderServiceTest.java::testCancelOrder_Normal [DIRECT]
+OrderService.java::OrderService.cancelOrder(HIGH) → java/RefundControllerTest.java::testRefund_CancelFlow [UPSTREAM]
+```
+
+查询用法（Step 4 用）：
+
+```bash
+# 给定爆炸半径中的符号，查出所有关联测试文件
+awk -F '→' '/OrderService.cancelOrder/ {print $2}' .trellis/tests/INDEX.md | awk -F '::' '{print $1}' | sort -u
+```
+
+### 0e. 首次运行：导入项目已有测试
+
+仅在 `.trellis/tests/imported/` 为空时执行一次：
+
+```bash
+# shopt skipped (not available on Windows) 2>/dev/null
+_IMPORTED=".trellis/tests/imported"
+_TOTAL=0
+
+# 通用扫描：遍历所有可能的标准测试目录
+for _DIR in "src/test/java" "src/test/kotlin" "src/test" \
+            "src/__tests__" "test" "tests" \
+            "src"; do
+    [ -d "$_DIR" ] || continue
+    _LABEL=$(basename "$_DIR")
+    mkdir -p "$_IMPORTED/$_LABEL"
+    find "$_DIR" -type f \( -name "*.java" -o -name "*.kt" -o -name "*.py" \
+        -o -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" \
+        -o -name "*_test.go" -o -name "*.rs" -o -name "*.c" -o -name "*.cpp" \) \
+        -exec cp --parents {} "$_IMPORTED/$_LABEL/" \; 2>/dev/null
+    _COUNT=$(find "$_IMPORTED/$_LABEL" -type f 2>/dev/null | wc -l)
+    echo "  $_LABEL: $_COUNT 个测试文件"
+    _TOTAL=$((_TOTAL + _COUNT))
+done
+
+echo "总计: $_TOTAL 个测试文件已导入"
+```
+
+建立初始 INDEX.md：
+
+```bash
+echo "# Test-Source Index - 导入的已有测试" > .trellis/tests/INDEX.md
+find .trellis/tests/imported -type f | while IFS= read -r f; do
+    _REL="${f#.trellis/tests/}"
+    echo "imported/*::* → $_REL::* [IMPORTED]" >> .trellis/tests/INDEX.md
+done
+```
+
+### 0f. 语言适配配置
+
+写入 `.trellis/tests/config.json`：
+
+```bash
+# 根据检测到的运行器类型生成配置
+# 通用原则：任何语言都能映射到"编译/检查命令"+"运行命令"
+case "$_RUNNER" in
+  maven)
+    echo '{"runner":"maven","command":"mvn test","compile":"mvn compile -q","test_dir":"src/test/java","cov_cmd":"mvn verify -Pcoverage"}' > .trellis/tests/config.json
+    ;;
+  gradle)
+    echo '{"runner":"gradle","command":"./gradlew test","compile":"./gradlew compileJava -q","test_dir":"src/test","cov_cmd":"./gradlew jacocoTestReport"}' > .trellis/tests/config.json
+    ;;
+  cargo)
+    echo '{"runner":"cargo","command":"cargo test","compile":"cargo check","test_dir":"tests","cov_cmd":"cargo tarpaulin"}' > .trellis/tests/config.json
+    ;;
+  go)
+    echo '{"runner":"go","command":"go test ./...","compile":"go build ./...","test_dir":".","cov_cmd":"go test -coverprofile=coverage.out ./..."}' > .trellis/tests/config.json
+    ;;
+  ctest)
+    echo '{"runner":"ctest","command":"ctest --output-on-failure","compile":"cmake --build .","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  vitest|jest|node)
+    _TEST_DIR=$(ls -d src/__tests__ test tests 2>/dev/null | head -1) || _TEST_DIR="tests"
+    _FRAMEWORK="jest"
+    command -v npx >/dev/null 2>&1 && npx vitest --version >/dev/null 2>&1 && _FRAMEWORK="vitest"
+    echo "{\"runner\":\"node\",\"command\":\"npx $_FRAMEWORK\",\"compile\":\"npx tsc --noEmit 2>/dev/null || echo [SKIP] TS\",\"test_dir\":\"$_TEST_DIR\",\"cov_cmd\":\"\"}" > .trellis/tests/config.json
+    ;;
+  python|pytest)
+    _ROOT=$(pwd)
+    echo "{\"runner\":\"pytest\",\"command\":\"python -m pytest\",\"compile\":\"python -m py_compile\",\"test_dir\":\"tests\",\"python_paths\":\"$_ROOT\",\"cov_cmd\":\"\"}" > .trellis/tests/config.json
+    ;;
+  kotlin)
+    echo '{"runner":"kotlin","command":"kotlin -cp test","compile":"kotlinc -d /tmp/classes","test_dir":"src/test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  swift)
+    echo '{"runner":"swift","command":"swift test","compile":"swift build","test_dir":"Tests","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  dart)
+    echo '{"runner":"dart","command":"dart test","compile":"dart analyze","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  php)
+    echo '{"runner":"php","command":"php -f","compile":"php -l","test_dir":"tests","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  ruby)
+    echo '{"runner":"ruby","command":"ruby","compile":"ruby -c","test_dir":"tests","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  dotnet)
+    echo '{"runner":"dotnet","command":"dotnet test","compile":"dotnet build","test_dir":"tests","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  elixir)
+    echo '{"runner":"elixir","command":"mix test","compile":"mix compile","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  ghc)
+    echo '{"runner":"ghc","command":"runhaskell","compile":"ghc -fno-code","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  scala)
+    echo '{"runner":"scala","command":"sbt test","compile":"sbt compile","test_dir":"src/test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  perl)
+    echo '{"runner":"perl","command":"perl","compile":"perl -c","test_dir":"t","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  lua)
+    echo '{"runner":"lua","command":"lua","compile":"luac -p","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  Rscript)
+    echo '{"runner":"Rscript","command":"Rscript","compile":"Rscript -e","test_dir":"test","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  bash)
+    echo '{"runner":"bash","command":"bash","compile":"bash -n","test_dir":"tests","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  powershell)
+    echo '{"runner":"powershell","command":"pwsh -f","compile":"pwsh -Command","test_dir":"tests","cov_cmd":""}' > .trellis/tests/config.json
+    ;;
+  generic|*)
+    # 通用回退：记录检测到的信息，测试用自包含文件
+    echo "{\"runner\":\"generic\",\"command\":\"echo [MANUAL] 请手动运行测试\",\"compile\":\"echo [SKIP] 通用模式跳过编译检查\",\"test_dir\":\".trellis/tests/generated\",\"lang\":\"$_LANG\",\"cov_cmd\":\"\"}" > .trellis/tests/config.json
+    ;;
+esac
+```
+
+### 0g. 备份已有测试文件
+
+在首次同步前，备份项目原有测试文件以防覆盖：
+
+```bash
+BACKUP_DIR=".trellis/tests/backup/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+# 轮换：只保留最近 5 次备份
+ls -dt .trellis/tests/backup/*/ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null
+case "$_RUNNER" in
+  maven|gradle) [ -d src/test ] && cp -r src/test .trellis/tests/backup/$(date +%Y%m%d_%H%M%S)/
+  ;;
+  python) [ -d tests ] && cp -r tests .trellis/tests/backup/$(date +%Y%m%d_%H%M%S)/
+  ;;
+  node) for d in src/__tests__ test tests; do [ -d "$d" ] && cp -r "$d" ".trellis/tests/backup/$(date +%Y%m%d_%H%M%S)/"; done
+  ;;
+esac
+echo "备份完成"
+```
+
+### 0h. 生成 → 同步机制
+
+```
+生成测试 → 写入 .trellis/tests/generated/
+        → 备份项目原有同名文件到 .trellis/tests/backup/
+        → 同步到项目标准测试目录
+        → 运行测试 → 报告
+```
+
+---
+
+### 0i. 初始化符号↔测试关系数据库（替代 grep INDEX.md）
+
+> ⚠️ **必须验证 spec_rules 和 test_spec_map 表存在**。执行完 `init` 后检查 schema，缺失则 `drop-all` + 重新 `init`。
+
+> SQLite 数据库维护符号与测试文件的多对多关系。所有操作通过 Python 脚本完成，不依赖 Unix 命令，Windows/macOS/Linux 全平台兼容。
+
+```bash
+_PY_CMD=${_PY_CMD:-python}
+_DB=".trellis/tests/test_index.db"
+_DB_SCRIPT=".trellis/scripts/test_db.py"
+
+# 确保 test_db.py 存在（实际脚本已维护在 .trellis/scripts/ 下）
+if [ ! -f "$_DB_SCRIPT" ]; then
+    echo "  [WARN] $_DB_SCRIPT not found — skipping DB init"
+else
+
+# 全量初始化 DB（建表 + 加载历史 spec + 加载历史测试映射 + codegraph 同步）
+$_PY_CMD $_DB_SCRIPT full-init
+echo "  [DB] 全量初始化完成 (代码图谱精确映射已就绪)"
+fi
+```
+
+**数据库关系**：
+```
+symbols ─── symbol_test_map ─── test_files
+  │              │                   │
+  name       symbol_id            path
+  src_file   test_id              layer
+             mapping_type          commit_hash
+                                   status (active/stale)
+```
+
+**历史项目迁移** — 首次加载时，若 DB 为空则自动全量初始化：
+
+```bash
+_DB=".trellis/tests/test_index.db"
+_PY_CMD=${_PY_CMD:-python}
+_DB_SCRIPT=".trellis/scripts/test_db.py"
+
+# 检查 DB 是否为空
+_DB_EMPTY=$($_PY_CMD -c "
+import sqlite3, os
+db=r'$_DB'
+if not os.path.isfile(db): print(1); exit()
+c=sqlite3.connect(db)
+print(int(c.execute('SELECT COUNT(*) FROM symbols').fetchone()[0]==0))
+c.close()
+" 2>/dev/null || echo 1)
+
+if [ "$_DB_EMPTY" = "1" ]; then
+    echo "  [迁移] DB 为空，执行全量初始化..."
+    $_PY_CMD $_DB_SCRIPT full-init
+fi
+```**取代的 grep 操作**：
+```
+旧：grep "symbolName" INDEX.md | awk ...  → 模糊匹配，可能误命中
+新：python test_db.py find symbolName       → SQL 精确 WHERE，零误报
+```
+
+---
+
+## Step 1: 影响分析 + 安全审计（MCP 驱动）
+
+### 1a. 获取变更清单
+
+> 当用户指定了目标文件（如 `/trellis-test 对 user_store.py`），即使 git 未检测到变更，也要对指定文件进行分析。
+
+```bash
+# 已跟踪文件的修改
+git diff --name-only HEAD
+# 已暂存但未提交的变更
+git diff --cached --name-only
+# 新增的未跟踪文件
+git status --porcelain | grep '^??' | cut -c4-
+```
+
+记录到 `.trellis/tests/MANIFEST.md`：
+
+```bash
+echo "# 变更来源: $(date '+%Y-%m-%d %H:%M')" > .trellis/tests/.affected_files
+{
+  git diff --name-only HEAD
+  git diff --cached --name-only
+  git status --porcelain | grep '^??' | cut -c4-
+} | sort -u >> .trellis/tests/.affected_files
+```
+
+```bash
+# 如果 git 检测不到变更，但用户指定了目标文件（如 user_store.py），使用显式目标
+if [ ! -s .trellis/tests/.affected_files ] || [ "$(grep -cvE '^(#|$)' .trellis/tests/.affected_files 2>/dev/null)" -eq 0 ]; then
+    if [ -n "$_TARGET_FILES" ]; then
+        echo "# 显式目标文件（非 git 检测）: $_TARGET_FILES" >> .trellis/tests/.affected_files
+        echo "$_TARGET_FILES" >> .trellis/tests/.affected_files
+        echo "  [TARGET] 使用用户指定的目标文件: $_TARGET_FILES"
+    else
+        echo "无未提交变更，无需生成测试"
+        exit 0
+    fi
+fi
+```
+
+### 1b. 符号级影响分析（codegraph + gitnexus）
+
+> ⚠️ **入口检查**：执行本步前必须确认 Step 0-1a 已完成（`.affected_files` 存在且有内容）。
+> ⚠️ **出口检查**：本步完成后 `.affected_symbols` 必须有内容（至少 1 个符号），否则不能进入 Step 2。
+
+对每个变更文件，提取变更的类/函数/符号：
+
+```bash
+while IFS= read -r file; do
+  git diff HEAD -- "$file" 2>/dev/null | grep -E '^[+-].*(def |function |class |public |private |protected ).*\('
+done < .trellis/tests/.affected_files
+```
+
+对每个关键符号，调用 MCP 工具做影响分析。**注意**：所有 `codegraph_explore` 调用必须传递 `projectPath` 参数（当前项目根目录）：
+
+#### 第1层 — 变更符号自身（Direct Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 源码定义、签名、入参/出参类型。
+
+#### 第2层 — 上游调用方（Upstream Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 查 callers（d=1）。
+
+#### 第3层 — 下游依赖方（Downstream Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 查 callees（d=1）。
+
+#### 第4层 — 同级关联（Peer Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 查同文件关联符号。
+
+#### 第5层 — 接口契约层（Interface Layer）
+**`codegraph_explore`**(query: 符号名, projectPath: $(pwd)) → 如符号是接口实现，查找同一接口的其他实现。
+
+#### 持久化受影响符号 → 供 Step 4b 使用
+
+```bash
+# 将从 MCP 分析中提取的所有受影响符号写入文件
+# 格式: 每行一个符号名
+cat > .trellis/tests/.affected_symbols << 'SYMBOLS'
+# 由 Step 1b 根据 codegraph + gitnexus 分析结果自动填充
+# 包含: 变更符号本身 + 上游调用方 + 下游依赖方 + 同级关联符号
+SYMBOLS
+
+# 实际写入逻辑：遍历上面 MCP 分析结果，去重写入
+echo "受影响符号已写入 .trellis/tests/.affected_symbols"
+
+# 设置风险等级（根据最高风险符号决定）
+# gitnexus impact 对每个符号返回 HIGH/MEDIUM/LOW
+# 取最高值作为本轮 _RISK_LEVEL
+_RISK_LEVEL="LOW"
+for symbol in "${SYMBOL_LIST[@]}"; do
+  _LEVEL=$(gitnexus_impact_level "$symbol" 2>/dev/null || echo "LOW")
+  case "$_LEVEL" in
+    HIGH) _RISK_LEVEL="HIGH"; break ;;
+    MEDIUM) [ "$_RISK_LEVEL" = "LOW" ] && _RISK_LEVEL="MEDIUM" ;;
+  esac
+done
+export _RISK_LEVEL
+echo "本轮风险等级: $_RISK_LEVEL"
+```
+
+#### 汇总示例
+
+```
+变更符号: OrderService.cancelOrder()
+
+  🟢 直接测试（第1层 — 变更自身）
+     ● cancelOrder() 正常取消 → 退款正确
+     ● cancelOrder() 已发货 → 拒绝
+     ● cancelOrder() 支付超时 → 事务回滚
+
+  🟡 上游回归测试（第2层 — 调用方不受损）
+     ● RefundController.refund() — 调用 cancelOrder
+     ● AdminOrderService.batchCancel() — 批量取消
+
+  🔵 下游回归测试（第3层 — 依赖方行为不变）
+     ● PaymentService.refund() — cancelOrder 调用此方法
+     ● InventoryService.releaseStock() — cancelOrder 调用此方法
+
+  🟣 同级关联测试（第4层 — 共享状态不受影响）
+     ● OrderService.modifyOrder() — 共享 orderRepository
+     ● OrderService.getOrderDetail() — 共享缓存
+
+  ⚪ 接口一致性（第5层 — 如有接口实现）
+     ● 无（cancelOrder 非接口实现）
+```
+
+风险等级（基于 gitnexus impact）：
+- **HIGH** — 影响 3+ 模块 / 核心数据流 / 支付/权限/安全
+- **MEDIUM** — 影响 1-2 个模块 / 常规业务逻辑
+- **LOW** — 仅本文件引用 / 私有方法
+
+### 1c. 按影响域分组
+
+| 域 | 包含 | 测试类型 |
+|------|------|----------|
+| 🔴 **高风险** | HIGH 等级的直接+上游+下游+同级 | 全部生成 |
+| 🟡 **业务逻辑** | MEDIUM 等级的 service/controller/handler | 直接+上游回归 |
+| 🔵 **数据层** | MEDIUM 等级的 model/repository/DAO | 直接测试 |
+| ⚪ **低风险** | LOW 等级的 utils/配置/前端 | 直接测试即可 |
+
+### 1d. 深度安全审计（MCP + 关键词）
+
+**第一层 — 静态扫描**：
+
+```bash
+git diff HEAD | grep -inE '(password|secret|api[_-]?key|token|credential|private_key|-----BEGIN|allowAll|setLenient|disableSsl|ssl.*false)'
+```
+
+**第二层 — 敏感数据流追踪**（codegraph，带 projectPath）：
+
+对静态扫描命中的每处敏感信息，调用 `codegraph_explore`(projectPath: $(pwd)) 追踪数据源和流向。
+
+**第三层 — gitnexus 历史审计**：
+
+查询 gitnexus 获取高风险文件的历史安全修复记录。
+
+---
+
+## Step 2: 确认测试点
+
+> ⚠️ **入口检查**：执行本步前必须确认 `.affected_symbols` 存在且有内容（Step 1b 的输出）。**绝对不能跳过 Step 1b**。
+> ⚠️ **出口检查**：展示测试计划后自动进入 Step 3，不需用户确认。
+> 
+> **禁止**：AI 不得跳过展示测试计划直接进入 Step 3。
+
+呈现测试计划，示例（**必须包含完整信息：文件路径、测试场景（Given/When/Then）、爆炸半径、历史回归测试、Spec验证清单**）：
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║     ▐ 测试计划 — 完整版                                       ║
+║     ▐ 风险等级: HIGH │ 变更文件: OrderService.java (+12/-3)   ║
+╚══════════════════════════════════════════════════════════════╝
+
+┌─ 爆炸半径地图 ──────────────────────────────────────────────┐
+│ Layer           │ Symbol                        │ Risk       │
+│─────────────────┼───────────────────────────────┼────────────│
+│ 🔵 DIRECT      │ OrderService.cancelOrder()    │ HIGH       │
+│ 🟡 UPSTREAM    │ OrderController.deleteOrder()  │ MED        │
+│                 │ AdminOrderService.batchDel()   │ MED        │
+│ 🔴 DOWNSTREAM  │ PaymentService.refund()        │ MED        │
+│ 🟣 PEER        │ OrderService.modifyOrder()     │ LOW        │
+│ ⚪ INTERFACE   │ IOrderService (2 impls)        │ MED        │
+│─────────────────┼───────────────────────────────┼────────────│
+│ 影响源: git diff HEAD + codegraph_explore                   │
+│ DB 符号映射: test_index.db → 3 条历史关联                      │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ 测试计划（按层） ──────────────────────────────────────────┐
+│                                                              │
+│ 🔵 DIRECT Layer — OrderService.cancelOrder()                 │
+│ ├─ 变更文件: src/main/java/OrderService.java:142-168         │
+│ ├─ 符号签名: cancelOrder(orderId: Long, reason: String): void│
+│ │                                                             │
+│ ├─ TC1: 正常取消 → 退款正确                                   │
+│ │   Given: 未发货订单 + valid cancel reason                    │
+│ │   When:  cancelOrder(1001L, "用户取消")                       │
+│ │   Then:  状态=CANCELLED, 退款已创建                           │
+│ │   ISTQB: [7.数据完整性] [1.输入边界]                         │
+│ │   输出: .trellis/tests/generated/java/OrderServiceDirectTest.java │
+│ │                                                             │
+│ ├─ TC2: 已发货 → 拒绝取消                                      │
+│ │   Given: 已发货订单 (status=SHIPPED)                         │
+│ │   When:  cancelOrder(1002L, "不想要")                         │
+│ │   Then:  抛出 OrderCannotCancelException, 状态不变            │
+│ │   ISTQB: [2.状态与生命周期]                                  │
+│ │   输出: .trellis/tests/generated/java/OrderServiceDirectTest.java │
+│ │                                                             │
+│ └─ TC3: 支付失败 → 事务回滚                                    │
+│     Given: mock PaymentService 抛出异常                        │
+│     When:  cancelOrder(1003L, "重复支付")                       │
+│     Then:  订单恢复 PENDING, 事务回滚                          │
+│     ISTQB: [5.错误处理与恢复]                                   │
+│     输出: .trellis/tests/generated/java/OrderServiceDirectTest.java │
+│                                                             │
+│ 小计: 3 测试点 (DIRECT)                                      │
+│                                                             │
+│ 🟡 UPSTREAM Layer — 调用方回归                                 │
+│ ├─ OrderController.deleteOrder() → cancelOrder               │
+│ │  ├─ 调用文件: src/main/java/OrderController.java:85-92      │
+│ │  ├─ 场景: deleteOrder 调用 cancelOrder 传参不变              │
+│ │  ├─ 输出: .trellis/tests/generated/java/OrderControllerRegTest.java │
+│ │  └─ Given/When/Then: deleteOrder → mock 验证 cancelOrder 被调用 │
+│ │                                                             │
+│ ├─ AdminOrderService.batchDel() → cancelOrder                 │
+│ │  ├─ 调用文件: src/main/java/AdminOrderService.java:201-215   │
+│ │  ├─ 场景: 批量取消时单条失败不影响其他                        │
+│ │  └─ 输出: .trellis/tests/generated/java/AdminOrderServiceRegTest.java │
+│ │                                                             │
+│ └─ 小计: 2 测试点 (UPSTREAM)                                 │
+│                                                             │
+│ 🔴 DOWNSTREAM Layer — 下游依赖                                 │
+│ ├─ PaymentService.refund()                                    │
+│ │  ├─ 被调用文件: src/main/java/PaymentService.java:55-70      │
+│ │  ├─ 场景: cancelOrder 调用 refund 的参数和顺序不变            │
+│ │  └─ 输出: .trellis/tests/generated/java/PaymentServiceMockTest.java │
+│ └─ 小计: 1 测试点 (DOWNSTREAM)                               │
+│                                                             │
+│ 🟣 PEER Layer — 同级关联                                       │
+│ ├─ OrderService.modifyOrder()                                 │
+│ │  ├─ 同文件: src/main/java/OrderService.java:200-230          │
+│ │  ├─ 场景: cancelOrder 状态变更不影响 modifyOrder 判断         │
+│ │  └─ 输出: .trellis/tests/generated/java/OrderServicePeerTest.java │
+│ └─ 小计: 1 测试点 (PEER)                                     │
+│                                                             │
+├─ 总计: 7 测试点 / 4 文件                                     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ 历史回归测试套件 ──────────────────────────────────────────┐
+│ 以下已有测试将被重新验证（不重新生成，只运行检查回归）:       │
+│                                                              │
+│ 文件                                  │ 验证内容              │
+│───────────────────────────────────────┼──────────────────────│
+│ java/OrderServiceTest.java            │ cancelOrder 历史场景  │
+│   test_cancelOrder_Shipped_ShouldFail │ 已发货取消测试        │
+│ java/PaymentServiceTest.java          │ 退款流程不变          │
+│   test_refund_Normal_ShouldSuccess    │                      │
+│ java/OrderControllerTest.java         │ deleteOrder 调用链   │
+│   test_deleteOrder_Cancel_ShouldWork  │                      │
+│───────────────────────────────────────┼──────────────────────│
+│ 来源: test_index.db find <symbol>     │ 新鲜度: a1b2c3d ✅   │
+│ 共 3 文件 / 5 方法                                       │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ Spec/PRD 验证清单 ──────────────────────────────────────────┐
+│                                                              │
+│ 来源                              │ 规则              │ 状态  │
+│──────────────────────────────────┼───────────────────┼──────│
+│ spec/order/order-cancel.md       │ 已发货不可取消    │ ✅   │
+│ spec/order/order-cancel.md       │ 取消必须记录原因  │ ✅   │
+│ spec/payment/refund-flow.md      │ 退款金额=实付金额  │ ⚠️   │
+│ spec/payment/refund-flow.md      │ 退款不超过3次     │ ❓   │
+│──────────────────────────────────┼───────────────────┼──────│
+│ PRD: tasks/TASK-123/prd.md §4    │ 取消流程          │ ✅   │
+│ 来源: test_index.db find-specs                           │
+│ 共 4 规则 (3 ✅, 1 ⚠️, 1 ❓)                          │
+└─────────────────────────────────────────────────────────────┘
+
+┌─ 测试生成优先级 ──────────────────────────────────────────────┐
+│ P0 DIRECT  OrderServiceDirectTest.java   ← 变更符号必须现在  │
+│ P1 UPSTREAM OrderControllerRegTest.java  ← 依赖 DIRECT 接口 │
+│ P1 DOWNSTREAM PaymentServiceMockTest.java                   │
+│ P2 PEER     OrderServicePeerTest.java    ← 低风险可延后     │
+└─────────────────────────────────────────────────────────────┘
+
+```
+**CI 模式**：设置 `TRELLIS_CI=true` 或创建 `.trellis/.ci_mode` 文件后，自动确认全部测试计划并进入 Step 3。用于 CI/CD 流水线和批量验证。
+
+
+---
+
+## Step 3: 并行生成测试（多子Agent + worktree 隔离）
+
+> ⚠️ **入口检查**：Step 2 完成后自动进入 Step 3。
+> ⚠️ **出口检查**：生成完成后必须确认 `generated/` 目录下至少有一个测试文件。文件为空=本步未完成。
+
+### 3a. 分配策略 — 并行子 Agent
+
+> **核心原则：独立测试文件间无依赖，必须并行生成。** 使用 `Agent` 工具的 `run_in_background` 参数同时启动多个子 Agent。
+
+| Agent | 职责 | 输入 | 加速效果 |
+|-------|------|------|---------|
+| 生成Agent-1 | DIRECT 层测试（变更符号自身） | symbol impact + 源文件 | 独立并行 |
+| 生成Agent-2 | UPSTREAM 层测试（调用方回归） | symbol impact + 源文件 | 独立并行 |
+| 生成Agent-3 | DOWNSTREAM+PEER 层测试 | symbol impact + 源文件 | 独立并行 |
+| 安全Agent | 并行审计报告 | 审计结果 | 与生成并行 |
+
+**执行方式 — 单条消息内并行发送**：
+
+```markdown
+Step 2 完成后，在**同一条消息中同时调用 3 个 Agent 工具**（不是串行！）：
+
+1. Agent(description="生成DIRECT测试", subagent_type="trellis-implement",
+        run_in_background=true,
+        prompt="根据 Step 1b 的 affected_symbols 和源文件，生成第1层 DIRECT 测试...")
+2. Agent(description="生成UPSTREAM测试", subagent_type="trellis-implement",
+        run_in_background=true,
+        prompt="根据 Step 1b 的 affected_symbols 和源文件，生成第2层 UPSTREAM 测试...")
+3. Agent(description="安全审计", subagent_type="trellis-research",
+        run_in_background=true,
+        prompt="根据 Step 1d 的安全审计结果，输出审计报告...")
+```
+
+Agent 全部完成后:
+- 读取各 Agent 的输出文件（写入 `.trellis/tests/generated/` 对应路径）
+- 验证每个 Agent 至少生成了一个测试文件
+- 汇总到 Step 3c 更新 INDEX.md
+
+**加速收益**：N 个 Agent 并行 ≈ 1/N 的生成时间（当前 N=3，速度提升约 3x）。
+
+### 3b. Agent prompt 模板 + 语言适配
+
+根据 Step 0b 检测到的项目类型，使用对应的测试框架和 mock 方案。**核心原则：任何语言至少能用自包含测试覆盖纯逻辑。**
+
+| 项目类型 | 测试方式 | Mock 方式 | 生成文件 |
+|---------|---------|----------|---------|
+| Java (Maven/Gradle/OA) | JUnit / 自包含 `main()` | @Mock / 手写 Mock 类 | `*.java` |
+| Android (Gradle) | JUnit + Espresso | Mockito | `*.java` / `*.kt` |
+| Kotlin | kotlin.test / 自包含 `main()` | 手写 Mock | `*.kt` |
+| Python (pytest) | pytest + unittest.mock | `patch()` / `MagicMock` | `test_*.py` |
+| Node.js (Jest/Vitest) | Jest / Vitest | `jest.mock()` / `vi.mock()` | `*.test.ts` |
+| Vue | Vitest + @vue/test-utils | `vi.mock()` | `*.test.ts` |
+| React | Vitest + @testing-library/react | `vi.mock()` | `*.test.tsx` |
+| Go | go test | 接口 mock | `*_test.go` |
+| Rust | cargo test | trait mock | `*.rs` |
+| Swift | XCTest | 类 mock | `*Tests.swift` |
+| Dart/Flutter | dart test / flutter test | Mockito | `*_test.dart` |
+| PHP | PHPUnit | createMock | `*Test.php` |
+| Ruby | Minitest / RSpec | mocha | `*_test.rb` |
+| C# (.NET) | xUnit / NUnit | Moq | `*Tests.cs` |
+| C/C++ (CMake) | CTest / Google Test | 手写 Mock | `*_test.c` |
+| TypeScript (无框架) | 自包含 `node --test` | 手写 Mock 对象 | `*.test.ts` |
+| 纯 JS (无框架) | 自包含 `node` + assert | 手写 Mock 对象 | `*.test.js` |
+| HTML/CSS | 纯 JS 逻辑提取测试 | — | `*.test.js` |
+| **通用回退（其他语言）** | **语言标准断言 + 自包含入口** | **手写 Mock** | **`*_test.<ext>`** |
+
+**前置步骤：读取业务上下文（生成测试前强制）**
+
+在生成任何测试代码前，必须先读取当前项目的业务规范和本次任务的 PRD，确保测试用例覆盖真实的业务场景：
+
+```bash
+# Step 3b.0: 读取业务上下文（强制）
+# 1. 扫描 .trellis/spec/**/*.md 获取项目规范和边界条件
+# 2. 扫描 .trellis/tasks/ 下当前任务的 prd.md 获取业务规则
+# 3. 如果 spec 或 PRD 中定义了业务约束（如"不能删除已发货的订单"），
+#    必须在测试中体现这些约束
+# 4. 将业务规则映射到下面的 10 类极限场景
+
+echo "=== 3b.0 读取业务上下文 ==="
+for _spec in .trellis/spec/**/*.md; do
+    [ -f "$_spec" ] && echo "  [SPEC] $_spec"
+done
+for _task in .trellis/tasks/*/prd.md; do
+    [ -f "$_task" ] && echo "  [PRD] $_task"
+done
+# 注意：不要求 spec/PRD 存在。不存在则跳过，仅基于源码生成测试。
+```
+
+**极限场景覆盖规则（强制，基于 ISTQB + 行业最佳实践）** — 每个变更符号必须从以下 10 大类中选择适用的场景生成测试：
+
+```bash
+# ════════════════════════════════════════════════════════
+# 通用极限场景分类（适用于所有编程项目、所有语言）
+# 来源: ISTQB 测试标准 + OWASP + 行业生产事故分析
+# ════════════════════════════════════════════════════════
+#
+# 1. 🔴 输入与数据边界（Input Boundaries）
+#    - null/None/undefined 输入
+#    - 空集合/空字符串/空数组
+#    - 类型不匹配（如传 String 期望 Integer）
+#    - 边界值: min-1, min, max, max+1
+#    - 特殊字符: Unicode, SQL 注入, XSS 向量
+#    - 超长输入（缓冲区溢出防护）
+#    - 负值（期望正值的场景）
+#
+# 2. 🔵 状态与生命周期（State & Lifecycle）
+#    - 初始状态（从未执行过）
+#    - 中间状态（事务未提交/连接未关闭）
+#    - 终态（已删除/已取消/已归档）
+#    - 非法状态转换（如已取消的单再审批）
+#    - 重复进入已处理状态
+#    - 过期/超时状态
+#
+# 3. 🟡 并发与竞态（Concurrency & Race Conditions）
+#    - 同时对同一资源写入
+#    - 读取期间写入（脏读）
+#    - 死锁场景
+#    - 丢失更新（read-modify-write 冲突）
+#    - 分布式锁超时
+#
+# 4. 🟠 资源约束（Resource Constraints）
+#    - 内存耗尽（OOM 防护）
+#    - 磁盘满/网络断开
+#    - 连接池耗尽
+#    - 文件句柄上限
+#    - 第三方 API 超时
+#
+# 5. 🔴 错误处理与恢复（Error Handling & Recovery）
+#    - 下游服务故障
+#    - 部分失败（部分成功部分失败）
+#    - 重试耗尽后的行为
+#    - 回滚一致性（全部或全不）
+#    - 异常传播链路
+#    - 优雅降级（服务降级时的行为）
+#
+# 6. 🟣 安全与权限（Security & Permissions）
+#    - 未认证访问
+#    - 越权操作（普通用户执行管理员操作）
+#    - 注入攻击（SQL/XSS/命令注入）
+#    - 用户间数据泄露
+#    - 频率限制/滥用防护
+#
+# 7. ⚪ 数据一致性与完整性（Data Integrity）
+#    - 重复提交/幂等性
+#    - 部分更新（事务中断后数据状态）
+#    - 约束违反（唯一约束、外键）
+#    - 数据类型溢出
+#    - 数据格式兼容性（旧版本格式）
+#
+# 8. 🟤 时间与调度（Time & Scheduling）
+#    - 夏令时切换
+#    - 闰年/2月29日
+#    - 时区边界（UTC+14 到 UTC-12）
+#    - 时间边界（午夜、月末、年末）
+#    - 定时任务触发边界
+#
+# 9. 📊 规模与性能（Scale & Performance）
+#    - 单条数据（最小可行）
+#    - 典型负载
+#    - 最大容量（上限 n 条时测 n 与 n+1）
+#    - 突发流量/批量高峰
+#    - 持续运行（长时间未重启）
+#    - 分页边界（page=0, last page, 越界）
+#
+# 10. 🔗 集成与契约（Integration & Contract）
+#     - API 签名变更
+#     - 版本不匹配
+#     - 消息格式变化
+#     - 缺少必填字段
+#     - 多余未知字段（后向兼容）
+#     - 协议降级
+
+示例：对 upsertSyncRecords() 根据 PRD 业务规则选择适用场景：
+  ✅ test_upsert_newRecord_insert()        # [1.输入边界] 新记录→INSERT
+  ✅ test_upsert_existingRecord_update()    # [7.数据完整性] 已存在→UPDATE 不重复
+  ✅ test_upsert_nullInput_noCrash()        # [1.输入边界] null→不抛异常
+  ✅ test_upsert_emptyList_noCrash()        # [1.输入边界] 空列表→不抛异常
+  ✅ test_upsert_duplicateCall_idempotent() # [7.幂等性] 多次调用不暴增
+  ✅ test_upsert_concurrent_noConflict()    # [3.并发] 同时插入不重复
+  ✅ test_upsert_pagination_boundary()      # [9.性能] 500/501/14897 条分页
+```
+
+**通用测试生成规则（适用于任何语言）**：
+
+```bash
+# 对 Step 0b 未覆盖到的语言，使用此通用模板：
+# 1. 将变更符号的纯逻辑提取为独立函数
+# 2. 用该语言的标准断言（assert, should, expect...）
+# 3. 生成自包含文件（有 main/entry point）
+# 4. 运行: <语言解释器/编译器> <测试文件>
+# 5. 测试文件头标注 TestedSource 和 TestedCommit
+```
+
+每个 Agent prompt 必须包含以下信息：
+
+```
+项目类型: {MAVEN/JEST/PYTEST/...}
+测试框架: {JUnit5/Jest/pytest/go test/cargo test/...}
+Mock方案: {Mockito/unittest.mock/jest.mock/...}
+
+== 第1层 — 变更符号（直接测试） ==
+源文件: {完整源码}
+变更符号: {函数/类列表 + 完整签名}
+
+== 第2层 — 上游调用方（回归测试） ==
+调用方签名: {caller1}, {caller2}
+
+== 第3层 — 下游依赖方（回归测试） ==
+被调用方签名: {callee1}, {callee2}
+
+== 第4层 — 同级关联（回归测试） ==
+同文件关联符号: {peer1}, {peer2}
+
+== 已有测试 ==
+{已有测试文件内容 | 无}
+
+== 任务 ==
+生成四类测试并标注覆盖层:
+1. DIRECT_TESTS — 变更符号本身
+2. UPSTREAM_REGRESSION_TESTS — 每个调用方
+3. DOWNSTREAM_REGRESSION_TESTS — 下游依赖路径
+4. PEER_REGRESSION_TESTS — 同级关联函数
+
+每个测试文件必须包含场景注释头，格式如下（语言对应）：
+
+# Python
+“””
+场景: <功能描述>
+功能: <验证内容>
+对应变更: <符号名> in <源文件名>
+TestedSource: <符号名>@<git commit hash>  ← 必须！记录生成时的代码版本
+风险等级: <HIGH/MEDIUM/LOW>
+Layer: <DIRECT/UPSTREAM/DOWNSTREAM/PEER>
+“””
+
+// Java / C / Go / Rust / JS — 对应语言注释格式，字段相同
+
+### 平台感知测试（避免跨平台假阴性）
+
+被测代码若有文件路径、换行符、环境变量、进程管理等操作，测试必须考虑跨平台差异：
+
+```bash
+# 平台变量（由 Step 0b 自动检测）
+# $_OS_PLATFORM = linux / macos / windows
+# $_PY_VERSION = 如 3.12
+
+# 生成测试时的平台适配规则：
+case $_OS_PLATFORM in
+  windows)
+    echo "  [PLATFORM] Windows 平台 — 测试路径用 os.path.join 而非硬编码 /"
+    echo "  [PLATFORM] 文件路径使用 posixpath/Path 而非 os.path.join（避免反斜杠）"
+    echo "  [PLATFORM] 换行符用 os.linesep 而非 \\n"
+    ;;
+  *)
+    echo "  [PLATFORM] POSIX 平台 — 标准路径处理"
+    ;;
+esac
+
+# Python 版本兼容：
+if python -c "import sys; exit(0 if sys.version_info >= (3,10) else 1)" 2>/dev/null; then
+    echo "  [PYVER] Python $_PY_VERSION — 支持现代语法"
+else
+    echo "  [PYVER] Python $_PY_VERSION — 测试避免使用 3.10+ 语法"
+fi
+```
+
+**平台感知测试原则**：
+1. 文件路径操作 → 使用 `os.path.join()` 或 `pathlib.Path`，不要硬编码 `/`
+2. 预期路径断言 → 在 Windows 上用 `os.sep` 拼接，不用 `/`
+3. 换行符 → `os.linesep` 而非 `\n`
+4. 环境变量 → `os.environ.get("VAR", "")` 而非 `os.environ["VAR"]`
+5. 临时目录 → `tempfile.gettempdir()` 而非 `/tmp/`
+6. 平台特定 bug → 如果 PR 跨平台修了 os.path.join/safe_join 等，生成双向测试（windows + posix）
+
+### 测试用例三段式标准（强制）
+
+每个测试方法必须按照 **Given → When → Then** 三段式结构编写：
+
+```java
+// 标准格式示例（Java）
+@Test
+public void test_{method}_{scenario}_{expected}() {
+    // 1. Given — 准备输入数据和 mock
+    List<Integer> input = Arrays.asList(1, 2, 3);
+    MockRecordSet mockRs = new MockRecordSet();
+    mockRs.whenQueryContains(“COUNT”, 1);  // mock 返回存在
+    
+    // 2. When — 执行真实业务方法
+    job.upsertSyncRecords(input, mockRs);
+    
+    // 3. Then — 验证输出/副作用
+    assertEquals(“UPDATE”, mockRs.getLastSqlType());
+    assertEquals(3, mockRs.getTotalExecutions());
+}
+```
+
+```python
+# 标准格式示例（Python）
+def test_{method}_{scenario}_{expected}():
+    # 1. Given
+    input_data = [1, 2, 3]
+    with patch(“module.RecordSet”) as mock_rs:
+        mock_rs.return_value.getInt.return_value = 1
+        
+        # 2. When
+        result = job.upsertSyncRecords(input_data)
+        
+        # 3. Then
+        assert result == “updated”
+```
+
+```javascript
+// 标准格式示例（Node/Jest）
+test('test_{method}_{scenario}_{expected}', () => {
+    // 1. Given
+    const input = [1, 2, 3];
+    const mockDb = { query: jest.fn().mockReturnValue([{ cnt: 1 }]) };
+    
+    // 2. When
+    const result = upsertSyncRecords(input, mockDb);
+    
+    // 3. Then
+    expect(mockDb.query).toHaveBeenCalledWith(expect.stringContaining('UPDATE'));
+});
+
+// 标准格式示例（JS + 无框架 — 自包含 node 测试）
+const assert = require('assert');
+function test_upsert_newRecord_shouldInsert() {
+    // 1. Given
+    const exists = false;
+    
+    // 2. When
+    const result = exists ? 'UPDATE' : 'INSERT';
+    
+    // 3. Then
+    assert.strictEqual(result, 'INSERT');
+    console.log('  [PASS] 新记录走 INSERT');
+}
+```
+
+规则：
+	**输出路径规则**（按月归档）：
+
+每个测试 Agent 生成文件时必须使用当前月份的目录。在 Agent prompt 中指定：
+```
+写入路径: .trellis/tests/generated/$(date +%Y/%m)/<镜像项目路径>
+```
+- 2026年7月 → `generated/2026/07/java/OrderServiceTest.java`
+- 2026年8月 → `generated/2026/08/java/OrderServiceTest.java`
+- 每个月首次运行自动创建当月目录
+
+**实际生成路径**：所有测试文件写入 `_ACTIVE_GEN_DIR`（由 Step 0c 定义）：
+
+```bash
+_ACTIVE_GEN_DIR=".trellis/tests/generated/$(date +%Y/%m)"
+mkdir -p "$_ACTIVE_GEN_DIR"
+```
+
+- 写入路径: `.trellis/tests/generated/$(date +%Y/%m)/<镜像路径>`，镜像项目源目录结构
+- 命名规范: 遵循各语言惯例
+- 不要覆盖已有不相关测试
+- 每个测试方法必须标注覆盖层:
+  // Layer: DIRECT / UPSTREAM / DOWNSTREAM / PEER
+- 测试文件头部必须包含场景注释头（含”对应变更”和”TestedSource”字段）
+- 测试方法名必须包含场景描述：`{method}_{scenario}_{expected}`
+- **生成位置必须是 `.trellis/tests/generated/`**，禁止写入 `src/` 或其他项目源目录
+- **禁止上传到服务器编译运行**。如果被测代码依赖服务端类库（如 Weaver OA 的 RecordSet），必须将核心逻辑提取为纯 static 方法，在本地用纯 JDK/语言标准库测试。测试不依赖服务端环境。
+- **生成的 DIRECT 测试必须仅限于测试该符号自身功能**，不引入对其他业务逻辑的副作用。通过以下约束确保：
+  - mock/stub 所有外部依赖（DB、网络、第三方服务），确保测试不触发真实业务副作用
+  - 使用隔离的数据对象（临时目录/内存DB/模拟对象），不污染共享状态
+  - 测试前后清理副作用（删除临时文件、恢复全局状态、关闭连接）
+  - 禁止在测试中修改生产环境的配置、环境变量或全局单例（如不可避免，必须在 teardown 中恢复）
+
+### 3c.5 测试质量增强（可选但推荐）
+
+根据项目类型和代码特点，选择适用的高级测试技术：
+
+**1. 基于属性的测试（Property-Based Testing）**
+当被测函数有明确的输入→输出关系时，生成随机输入验证不变量：
+```java
+// Java: 无框架的自包含属性测试
+static void testUpsertProperty() {
+    Random rand = new Random(42);  // 固定种子保证可复现
+    for (int i = 0; i < 100; i++) {
+        boolean exists = rand.nextBoolean();
+        String result = decideUpsert(exists, new SqlRecorder());
+        assert exists ? "UPDATE".equals(result) : "INSERT".equals(result);
+    }
+    System.out.println("  [PASS] 属性测试: 100 组随机输入验证 through");
+}
+```
+```python
+# Python: 无外部依赖
+def test_upsert_property():
+    import random; random.seed(42)
+    for _ in range(100):
+        exists = random.choice([True, False])
+        result = decide_upsert(exists, SqlRecorder())
+        assert (exists and result == "UPDATE") or (not exists and result == "INSERT")
+```
+验证原则：**不变量**（Invariant）——无论输入如何变化，某些性质始终成立。
+
+**2. 特征测试（Characterization Test / Golden Master）**
+用于遗留代码（Legacy Code）——没有现有测试，但不敢重构的代码：
+- 运行一次现有代码，记录输出为「金标准」（Golden Master）
+- 后续改动后对比输出是否一致
+- 输出变化 = 行为变更（需人工确认是 bug 还是预期改动）
+
+**3. Mock 隔离原则**
+- 每次测试前 `@BeforeEach` / `setup()` 重置 Mock 状态
+- Mock 的返回值应该明确指定，不要依赖 Mock 框架的默认值
+- 对关键交互调用 `verify(mock).method()` 验证确实被调用了
+- 不要 Mock 值对象 / POJO / 数据类
+
+这些增强技术不是强制要求，但在高风险模块（支付、安全、核心数据流）应主动采用。
+
+### 3d. 不可提取方法的 Fallback 策略
+
+> 当某个 affected_symbol **无法提取纯逻辑**（100% 依赖服务端类库如 RecordSet/HttpClient/ORM），不能直接跳过——必须生成**契约测试**（Contract Test）。
+
+**契约测试规则**：
+
+1. 分析方法签名，提取**输入参数类型**和**返回值类型**作为契约
+2. 生成测试文件验证：
+   - 输入参数非空校验（null 检查）
+   - 返回值类型匹配
+   - 方法签名正确（不报 NoSuchMethodError）
+   - 调用路径完整（调用链不中断）
+3. 如果该符号有明确的**纯逻辑子方法**，提取子方法逻辑测试
+4. 契约测试文件头部必须标注 `Layer: UNTESTABLE（手动验证）`
+
+**契约测试示例 (Java)**：
+```java
+/**
+ * 场景: sendData 接口契约测试（依赖 OA RecordSet，无法纯本地执行）
+ * 对应变更: sendData in MdmOahrmCombinedCronJob.java
+ * TestedSource: sendData@a614c65
+ * 风险等级: MEDIUM
+ * Layer: UNTESTABLE（手动验证）
+ *
+ * 验证内容:
+ *   1. sendData 参数类型正确 (JSONObject, JSONArray, String, List<Integer>)
+ *   2. 调用 sendData 的上下游链路完整
+ *   3. 纯逻辑部分（分页索引计算）已被 DIRECT 测试覆盖
+ */
+public class SendDataContractTest {
+    public static void main(String[] args) {
+        // 验证方法签名（编译期检查）
+        // sendData(JSONObject, JSONArray, String, List<Integer>) → void
+        
+        // Given: 分页参数验证（纯逻辑，已由分页测试覆盖）
+        assertEq(3, (1200 + 500 - 1) / 500, "1200条=3页");
+        assertEq(0, 0 * 500, "第1页offset=0");
+        assertEq(500, 1 * 500, "第2页offset=500");
+        
+        System.out.println("[PASS] sendData 契约验证通过");
+        System.out.println("[NOTE] 运行时行为需在 OA 环境手动验证");
+    }
+    
+    static void assertEq(int exp, int act, String msg) {
+        if (exp != act) throw new AssertionError(msg);
+    }
+}
+```
+
+**契约测试示例 (Python)**：
+```python
+"""
+场景: send_data 接口契约测试（依赖 OA RecordSet，无法纯本地执行）
+对应变更: send_data in module.py
+TestedSource: send_data@abc1234
+风险等级: MEDIUM
+Layer: UNTESTABLE（手动验证）
+"""
+def test_send_data_contract():
+    # 验证参数类型契约
+    import inspect
+    sig = inspect.signature(send_data)
+    assert 'post_body' in sig.parameters
+    assert 'master_datas' in sig.parameters
+    print("[PASS] send_data 契约验证通过")
+```
+
+**处理流程**：
+1. 对每个 uncovered symbol，先判断能否提取纯逻辑
+2. 能提取 → 生成正常测试（Given→When→Then）
+3. 不能提取 → 生成契约测试，标记 `Layer: UNTESTABLE`
+4. 如果该符号的内部调用了可测试的纯逻辑子方法，额外生成子方法测试
+5. 报告中标记 `[手动验证]` 并说明依赖的服务端环境
+```
+
+### 3c. 等待与合并 + 更新 INDEX.md + MANIFEST.md
+
+在启动子 Agent 前创建标记文件（解决 `-newer` 时序问题）：
+
+```bash
+python -c "open('.trellis/tests/.generation_start
+```
+
+全部 Agent 完成后：
+
+```bash
+# shopt skipped (not available on Windows) 2>/dev/null
+_INDEX=".trellis/tests/INDEX.md"
+_MANIFEST=".trellis/tests/MANIFEST.md"
+_GENERATED_DIR=".trellis/tests/generated"
+```
+
+**更新 INDEX.md + 关系数据库** — 从 `generated/` 目录重建全部索引（DB 为主，INDEX.md 为可读视图）：
+
+```bash
+# 关键：从 generated/ 目录扫描测试文件，插入 DB（符号↔测试 + 测试↔Spec 双映射）
+_DB=".trellis/tests/test_index.db"
+_GENERATED_DIR=".trellis/tests/generated"
+_INDEX=".trellis/tests/INDEX.md"
+_PY_CMD=${_PY_CMD:-python}
+_DB_SCRIPT=".trellis/scripts/test_db.py"
+
+# 扫描 generated/ 下所有测试文件
+find "$_GENERATED_DIR" -type f \( -name "*.java" -o -name "*.kt" -o -name "*.py" \
+    -o -name "*.test.ts" -o -name "*.spec.ts" -o -name "*.test.js" \
+    -o -name "*_test.go" -o -name "*.rs" \
+    -o -name "*.c" -o -name "*.cpp" \) 2>/dev/null | \
+while IFS= read -r testfile; do
+    _HEAD=$(python -c "
+import sys
+try:
+    with open('$testfile', 'r', encoding='utf-8') as f: print(f.read(2000))
+except: pass
+" 2>/dev/null)
+    [ -z "$_HEAD" ] && continue
+    
+    # 提取符号映射
+    _SYMBOL=$(echo "$_HEAD" | grep "对应变更" | sed 's/.*对应变更: \([^ ]*\) in .*/\1/')
+    _SRC=$(echo "$_HEAD" | grep "对应变更" | sed 's/.*对应变更: [^ ]* in \([^ ]*\).*/\1/')
+    _LAYER=$(echo "$_HEAD" | grep -iE '(Layer|层)' | grep -oE '(DIRECT|UPSTREAM|DOWNSTREAM|PEER|IMPORTED)' | head -1)
+    _COMMIT=$(echo "$_HEAD" | grep "TestedSource:" | sed 's/.*TestedSource:[^@]*@//' | xargs)
+    _RELPATH="${testfile#.trellis/tests/}"
+    _LAYER=${_LAYER:-DIRECT}; _COMMIT=${_COMMIT:-unknown}
+    
+    if [ -n "$_SYMBOL" ]; then
+        # 写入 DB：符号↔测试映射
+        $_PY_CMD $_DB_SCRIPT add "$_SYMBOL" "$_SRC" "$_RELPATH" "$_LAYER" "$_COMMIT" "$_LAYER" 2>/dev/null || true
+        
+        # 提取 SpecRef 并写入 DB：测试↔Spec 映射
+        # 格式: SpecRef: spec-file.md::rule-path 规则描述
+        echo "$_HEAD" | grep "SpecRef:" | while IFS= read -r _spec_line; do
+            _SPEC_FILE=$(echo "$_spec_line" | sed 's/.*SpecRef:[ ]*\([^ ]*\)::[^ ]*.*/\1/' | xargs)
+            _RULE_PATH=$(echo "$_spec_line" | sed 's/.*SpecRef:[ ]*[^ ]*::\([^ ]*\).*/\1/' | xargs)
+            _RULE_SUM=$(echo "$_spec_line" | sed 's/.*SpecRef:[ ]*[^ ]*::[^ ]*[ ]*//' | xargs)
+            if [ -n "$_SPEC_FILE" ] && [ -n "$_RULE_PATH" ]; then
+                $_PY_CMD $_DB_SCRIPT add-spec "$_SPEC_FILE" "$_RULE_PATH" "$_RULE_SUM" 2>/dev/null || true
+                $_PY_CMD $_DB_SCRIPT map-spec "$_RELPATH" "$_SPEC_FILE" "$_RULE_PATH" "$_RULE_SUM" 2>/dev/null || true
+            fi
+        done
+    fi
+done
+
+# 从 DB 导出 INDEX.md（可读视图）
+$_PY_CMD $_DB_SCRIPT export > "$_INDEX" 2>/dev/null
+_INDEX_COUNT=$(grep -c '->' "$_INDEX" 2>/dev/null || echo 0)
+echo "INDEX.md + DB 已重建: $_INDEX_COUNT 条映射"
+
+# 自愈：如果 INDEX.md 为空则报错
+if [ "$_INDEX_COUNT" -eq 0 ]; then
+    echo "[ERROR] INDEX.md 重建后仍为空，终止流程"
+    exit 1
+fi
+echo "[OK] 符号↔测试关系库验证通过: $_INDEX_COUNT 条映射"
+```
+
+**更新 MANIFEST.md** — 使用标记文件避免 `-newer` 时序问题。存储相对于 `.trellis/tests/generated/` 的路径：
+
+```bash
+_MARKER=".trellis/tests/.generation_start"
+if [ ! -f "$_MARKER" ]; then
+    python -c "open('"$_MARKER"
+    echo "警告: .generation_start 不存在，已重新创建"
+fi
+
+echo "# $(date '+%Y-%m-%d %H:%M') - 变更: $(tr '\n' ' ' < .trellis/tests/.affected_files)" >> "$_MANIFEST"
+find "$_GENERATED_DIR" -type f -newer "$_MARKER" -printf '%P\n' >> "$_MANIFEST"
+_FILE_COUNT=$(find "$_GENERATED_DIR" -type f -newer "$_MARKER" | wc -l)
+echo "# 该轮生成: $_FILE_COUNT 个文件" >> "$_MANIFEST"
+```
+
+`-printf '%P\n'` 输出相对于 `$_GENERATED_DIR` 的路径（如 `java/OrderServiceTest.java`），而非全路径。
+
+
+## Step 4: 选择测试 + 运行 + 自动修复循环
+
+核心逻辑：
+```
+.affected_symbols（受影响符号列表）→ 查 INDEX.md → 关联测试文件列表 → 只跑这些测试
+```
+
+### 4a. 同步测试文件到项目目录
+
+```bash
+# shopt skipped (not available on Windows) 2>/dev/null
+
+# 备份：同步前备份项目原有测试文件
+_BACKUP_DIR=".trellis/tests/backup/$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$_BACKUP_DIR"
+
+# 根据运行器同步
+_RUNNER=$(python3 -c "import json; print(json.load(open('.trellis/tests/config.json')).get('runner',''))" 2>/dev/null || \
+         python -c "import json; print(json.load(open('.trellis/tests/config.json')).get('runner',''))" 2>/dev/null || \
+         echo "")
+
+case "$_RUNNER" in
+  maven)
+    mkdir -p src/test/java
+    [ -f src/test/java/OrderServiceTest.java ] && cp src/test/java/OrderServiceTest.java "$_BACKUP_DIR/" 2>/dev/null
+    # 从所有月份目录同步
+    find .trellis/tests/generated -path "*/java/*" -type f -exec cp {} src/test/java/ \; 2>/dev/null
+    ;;
+  gradle)
+    mkdir -p src/test
+    find .trellis/tests/generated -path "*/java/*" -type f -exec cp {} src/test/ \; 2>/dev/null
+    ;;
+  cargo)
+    mkdir -p tests
+    find .trellis/tests/generated -path "*/rust/*" -type f -exec cp {} tests/ \; 2>/dev/null
+    ;;
+  go)
+    find .trellis/tests/generated -name "*_test.go" -type f -exec cp {} . \; 2>/dev/null
+    ;;
+  ctest)
+    mkdir -p test
+    find .trellis/tests/generated -path "*/c/*" -o -path "*/cpp/*" -type f -exec cp {} test/ \; 2>/dev/null
+    ;;
+  node)
+    _TD=$(ls -d src/__tests__ test tests 2>/dev/null | head -1) || _TD="tests"
+    mkdir -p "$_TD"
+    find .trellis/tests/generated \( -name "*.test.*" -o -name "*.spec.*" \) -type f -exec cp {} "$_TD/" \;
+    ;;
+  python)
+    mkdir -p tests
+    find .trellis/tests/generated -name "test_*.py" -type f -exec cp {} tests/ \; 2>/dev/null
+    ;;
+esac
+```
+
+### 4a.5 编译检查（所有项目强制，仅本地）
+
+> ⚠️ **所有编译/语法检查必须在本地执行，禁止上传到服务器**。
+> ⚠️ **测试文件路径必须在 `.trellis/tests/generated/` 下**，如有在 `src/` 等其他目录的，自动移动到 generated/。
+> ⚠️ **任何项目改完代码，必须先确保编译/语法通过才能跑测试**。编译失败 = 代码有错误，测试无意义。
+
+根据 Step 0b 检测到的项目类型执行编译/语法检查：
+
+```bash
+# 编译/语法检查：按项目类型
+if [ -f pom.xml ]; then
+    mvn compile -q 2>&1 | tail -5 || { echo "[FAIL] 编译失败"; exit 1; }
+elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then
+    if grep -qi "com\.android" build.gradle* 2>/dev/null; then
+        ./gradlew compileDebugSources -q 2>&1 | tail -5 || echo "  [WARN] Android 编译需要 SDK，跳过"
+    else
+        ./gradlew compileJava -q 2>&1 | tail -5 || { echo "[FAIL] 编译失败"; exit 1; }
+    fi
+elif [ -f go.mod ]; then
+    go build ./... 2>&1 || { echo "[FAIL] 编译失败"; exit 1; }
+elif [ -f Cargo.toml ]; then
+    cargo check 2>&1 | tail -5 || { echo "[FAIL] 编译失败"; exit 1; }
+elif [ -f package.json ]; then
+    echo "Node/前端项目: 检测 TypeScript/ESLint"
+    [ -f tsconfig.json ] && npx tsc --noEmit 2>&1 | tail -5 || echo "  [SKIP] 无 tsconfig.json，跳过 TS 检查"
+    npm run lint 2>/dev/null && echo "  [PASS] Lint" || echo "  [SKIP] 无 lint 脚本"
+elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+    echo "Python 项目: py_compile 语法检查"
+    for _f in $(git diff --name-only HEAD -- "*.py" 2>/dev/null); do
+        [ -f "$_f" ] && python -m py_compile "$_f" 2>&1 || { echo "[FAIL] 语法错误: $_f"; exit 1; }
+    done
+else
+    # 通用回退：根据文件扩展名做语法/编译检查
+    echo "  [检测] 无标准构建文件，尝试按源文件类型做语法检查..."
+    _CHECK_FAIL=0
+    for _f in $(git diff --name-only HEAD 2>/dev/null | head -10); do
+        [ -f "$_f" ] || continue
+        case "$_f" in
+            *.kt)    kotlinc -d /tmp/classes "$_f" 2>&1 | tail -1 | grep -v "Note:" || _CHECK_FAIL=1 ;;
+            *.swift) swiftc -typecheck "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.dart)  dart analyze "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.php)   php -l "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.rb)    ruby -c "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.js)    node --check "$_f" 2>&1 || _CHECK_FAIL=1 ;;
+            *.ts)    npx tsc --noEmit "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.cs)    mcs -target:exe -out:/tmp/check.exe "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.sh)    bash -n "$_f" 2>&1 || _CHECK_FAIL=1 ;;
+            *.lua)   luac -p "$_f" 2>&1 || _CHECK_FAIL=1 ;;
+            *.pl)    perl -c "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.r)     Rscript -e "parse(file='$_f')" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+            *.c|*.cpp) gcc -fsyntax-only "$_f" 2>&1 | tail -1 || _CHECK_FAIL=1 ;;
+        esac
+        if [ "$_CHECK_FAIL" -eq 1 ]; then
+            echo "  [FAIL] 语法检查失败: $_f"
+            echo "  [INFO] 编译失败不影响测试生成，但运行测试前需修复"
+        fi
+    done
+    [ "$_CHECK_FAIL" -eq 0 ] && echo "  [PASS] 语法检查通过" || echo "  [WARN] 部分文件语法检查未通过"
+fi
+echo "[PASS] 编译/语法检查完成"
+```
+
+### 4b. 爆炸半径 → 查 INDEX.md + 扫 generated/ → 选定测试
+
+> ⚠️ **入口检查**：进入 4c 前必须先执行 4b 并完成爆炸半径全覆盖验证。4b 查到的历史测试和 4c 要跑的测试集必须一致，AI 不得自行缩减。
+
+```bash
+_INDEX=".trellis/tests/INDEX.md"
+_SYMBOL_FILE=".trellis/tests/.affected_symbols"
+
+# 从 Step 1b 写入的文件读取受影响符号
+AFFECTED_SYMBOLS=()
+while IFS= read -r line; do
+    # 跳过注释和空行
+    [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+    AFFECTED_SYMBOLS+=("$line")
+done < "$_SYMBOL_FILE"
+
+# 如果没有符号记录（首次运行等情况），从受影响文件推断
+if [ ${#AFFECTED_SYMBOLS[@]} -eq 0 ]; then
+    echo "警告: .affected_symbols 为空，尝试从 git diff 推断"
+    while IFS= read -r f; do
+        basename "$f" | sed 's/\.[^.]*$//' >> /tmp/_symbols
+    done < .trellis/tests/.affected_files
+    AFFECTED_SYMBOLS=($(sort -u /tmp/_symbols))
+fi
+
+# 查询 DB：用 SQL 精确匹配受影响符号→测试文件
+# 替代旧的 grep INDEX.md 模糊匹配方式
+_PY_CMD=${_PY_CMD:-python}
+_DB_SCRIPT=".trellis/scripts/test_db.py"
+TEST_FILES=()
+TEST_LAYERS=()
+
+# 调用 DB 查询：精确符号匹配，零误报
+_DB_RESULT=$($_PY_CMD $_DB_SCRIPT find "${AFFECTED_SYMBOLS[@]}" 2>/dev/null || true)
+if [ -n "$_DB_RESULT" ]; then
+    while IFS='|' read -r _path _layer _hash; do
+        [ -z "$_path" ] && continue
+        TEST_FILES+=("$_path")
+        TEST_LAYERS+=("$_layer")
+    done <<< "$_DB_RESULT"
+fi
+
+# 验证 DB 测试文件是否真实存在于磁盘（清理孤立记录）
+_VALID_TF=(); _VALID_TL=()
+for _idx in "${!TEST_FILES[@]}"; do
+    _f="${TEST_FILES[$_idx]}"
+    if [ -f ".trellis/tests/$_f" ]; then
+        _VALID_TF+=("$_f"); _VALID_TL+=("${TEST_LAYERS[$_idx]}")
+    else
+        echo "  [CLEANUP] DB 孤立记录: $_f (文件不存在)"
+    fi
+done
+TEST_FILES=("${_VALID_TF[@]}"); TEST_LAYERS=("${_VALID_TL[@]}")
+
+# ⭐ 兜底：DB 查不到测试时，从 git 历史自动发现并注册
+if [ ${#TEST_FILES[@]} -eq 0 ]; then
+    echo "  [DISCOVER] DB 无历史测试映射，从 git 日志自动发现..."
+    _SRC_FILES=$(grep -vE '^(#|$)' .trellis/tests/.affected_files | grep -E '\.(py|js|ts|java|go|rs|c|cpp)$' || true)
+    if [ -n "$_SRC_FILES" ]; then
+        echo "    affected 源文件: $(echo $_SRC_FILES | tr '\n' ' ')"
+        $_PY_CMD $_DB_SCRIPT discover $_SRC_FILES 2>&1
+        _DB_RESULT=$($_PY_CMD $_DB_SCRIPT find "${AFFECTED_SYMBOLS[@]}" 2>/dev/null || true)
+        if [ -n "$_DB_RESULT" ]; then
+            while IFS='|' read -r _path _layer _hash; do
+                [ -z "$_path" ] && continue
+                TEST_FILES+=("$_path")
+                TEST_LAYERS+=("$_layer")
+            done <<< "$_DB_RESULT"
+            echo "  [DISCOVER] git 历史发现 ${#TEST_FILES[@]} 个测试文件"
+        else
+            echo "  [DISCOVER] git 历史未发现关联测试"
+        fi
+    else
+        echo "  [SKIP] 无源码文件变更，跳过 git 历史发现"
+    fi
+
+    # ⭐ 二级兜底：DB + git 历史都无关联测试 → 进入 Step 3 补充生成 DIRECT 测试
+    # 确保每个 affected_symbol 至少有一个 DIRECT 测试覆盖。
+    # 同时需要保证这些生成的测试不影响其他业务逻辑（仅测试该符号自身的功能）。
+    if [ ${#TEST_FILES[@]} -eq 0 ] && [ ${#AFFECTED_SYMBOLS[@]} -gt 0 ]; then
+        echo "  [GENERATE] DB+git 均无历史测试，进入 Step 3 补充生成 DIRECT 测试..."
+        echo "    受影响符号: ${AFFECTED_SYMBOLS[*]}"
+        echo "    将生成 DIRECT 层测试（仅测试符号自身功能，不影响其他业务逻辑）"
+        
+        # 这里不阻塞主流程，而是通过设置标记让 Step 3 在后续被触发
+        # 将未覆盖符号写入文件，供 Step 3 引用
+        printf "%s\n" "${AFFECTED_SYMBOLS[@]}" > .trellis/tests/.uncovered_symbols
+        
+        # 标记"需要补充生成"，Step 3 的入口检查会识别此标记
+        echo "NEED_GENERATE" > .trellis/tests/.need_generate
+        
+        # 注意：实际上生成测试的入口在 Step 3，这里只是记录缺口。
+        # 主流程接下来会进入"全覆盖验证"→ 发现_UNCOVERED_SYMBOLS → 进入 Step 3 补充生成
+        echo "  [GENERATE] 已记录 ${#AFFECTED_SYMBOLS[@]} 个未覆盖符号，后续进入 Step 3 补充生成。"
+    fi
+fi
+
+# 补充扫描：查 generated/ 中未入库的测试文件（自愈）
+_GENERATED_DIR=".trellis/tests/generated"
+if [ -d "$_GENERATED_DIR" ]; then
+    find "$_GENERATED_DIR" -type f \( -name "*.java" -o -name "*.py" -o -name "*.test.*" \) | while IFS= read -r testfile; do
+        _HEAD=$(head -40 "$testfile")
+        _SYMBOL=$(echo "$_HEAD" | grep "对应变更" | sed 's/.*对应变更: \([^ ]*\) in .*/\1/')
+        [ -z "$_SYMBOL" ] && continue
+        _RELPATH="${testfile#.trellis/tests/}"
+        # 检查是否已在 DB 中
+        _IN_DB=false
+        for _f in "${TEST_FILES[@]}"; do [ "$_f" = "$_RELPATH" ] && _IN_DB=true && break; done
+        [ "$_IN_DB" = true ] && continue
+        # 检查符号是否受本次变更影响
+        for _sym in "${AFFECTED_SYMBOLS[@]}"; do
+            if [ "$_sym" = "$_SYMBOL" ]; then
+                _LAYER=$(echo "$_HEAD" | grep -iE '(Layer|层)' | grep -oE '(DIRECT|UPSTREAM|DOWNSTREAM|PEER|IMPORTED)' | head -1)
+                TEST_FILES+=("$_RELPATH"); TEST_LAYERS+=("${_LAYER:-DIRECT}")
+                # 同时修复 DB
+                $_PY_CMD $_DB_SCRIPT add "$_SYMBOL" "$(echo "$_HEAD"|grep '对应变更'|sed 's/.*对应变更: [^ ]* in \(.*\)/\1/')" "$_RELPATH" "${_LAYER:-DIRECT}" "unknown" "${_LAYER:-DIRECT}" 2>/dev/null || true
+                echo "  [修复] generated/ 未入库文件已补充: $_RELPATH"
+                break
+            fi
+        done
+    done
+fi
+
+# 全层覆盖：无论风险等级，必须生成并运行 DIRECT + UPSTREAM + DOWNSTREAM + PEER 全部四层测试
+# 原因：LOW 风险也可能覆盖到关键依赖路径，跳过任何一层都可能漏报回归
+_ALLOWED_LAYERS="DIRECT|UPSTREAM|DOWNSTREAM|PEER"
+
+# 按层过滤
+SELECTED_TESTS=()
+for _idx in "${!TEST_FILES[@]}"; do
+    _layers="${TEST_LAYERS[$_idx]}"
+    echo "$_layers" | grep -qE "$_ALLOWED_LAYERS" || continue
+    SELECTED_TESTS+=("${TEST_FILES[$_idx]}")
+done
+
+# 去重
+IFS=$'\n' SELECTED_TESTS=($(printf "%s\n" "${SELECTED_TESTS[@]}" | sort -u))
+unset IFS
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  爆炸范围全覆盖验证（符号级 × 层級）"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "受影响符号(${#AFFECTED_SYMBOLS[@]}): ${AFFECTED_SYMBOLS[*]}"
+echo "风险等级: $_RISK_LEVEL | 允许: $_ALLOWED_LAYERS"
+echo ""
+
+# 显示 DB 查询到的历史测试映射
+echo "┌─ 历史测试映射（来自 test_index.db）───────────────┐"
+if [ ${#TEST_FILES[@]} -gt 0 ]; then
+    for _idx in "${!TEST_FILES[@]}"; do
+        echo "│ ${TEST_FILES[$_idx]}  [${TEST_LAYERS[$_idx]}]"
+    done
+else
+    echo "│ (无历史映射，需全部新生成)"
+fi
+echo "└────────────────────────────────────────────────────┘"
+echo "命中测试文件: ${#SELECTED_TESTS[@]}"
+echo ""
+
+# 爆炸范围全覆盖验证：每个 affected_symbol 在每个层至少有一个测试
+# 使用 DB 精确查询优先，INDEX.md grep 回退
+_DB=".trellis/tests/test_index.db"
+_UNCOVERED_SYMBOLS=()
+_UNCOVERED_LAYERS=()  # 记录每个符号缺失的层
+_SYMBOL_LAYER_MAP=()  # symbol::LAYER = covered
+
+echo "┌─ 逐符号覆盖率检查 ─────────────────────────────────┐"
+for _sym in "${AFFECTED_SYMBOLS[@]}"; do
+    # 对每个符号，检查 4 层的覆盖情况
+    _SYM_COVERED=0
+    _SYM_MISSING_LAYERS=""
+    
+    for _layer in "DIRECT" "UPSTREAM" "DOWNSTREAM" "PEER"; do
+        # DB 查询优先，回退到 INDEX.md grep
+        if [ -f "$_DB" ]; then
+            _DB_COVERED=$($_PY_CMD $_DB_SCRIPT check-coverage "$_sym" "$_layer" 2>/dev/null || echo "0")
+        else
+            _DB_COVERED=0
+        fi
+        
+        if [ "$_DB_COVERED" = "1" ]; then
+            _SYM_COVERED=$((_SYM_COVERED + 1))
+            echo "│ ✅ $_sym :: $_layer -- 已覆盖"
+        elif grep -q "$_sym.*\[$_layer\]" ".trellis/tests/INDEX.md" 2>/dev/null; then
+            _SYM_COVERED=$((_SYM_COVERED + 1))
+            echo "│ ✅ $_sym :: $_layer -- 已覆盖 (INDEX.md)"
+        else
+            _SYM_MISSING_LAYERS="${_SYM_MISSING_LAYERS} ${_layer}"
+            echo "│ ❌ $_sym :: $_layer -- 未覆盖"
+        fi
+    done
+    
+    if [ "$_SYM_COVERED" -lt 4 ]; then
+        _UNCOVERED_SYMBOLS+=("$_sym")
+        _UNCOVERED_LAYERS+=("$_SYM_MISSING_LAYERS")
+        echo "│  → $_sym 缺失层:$_SYM_MISSING_LAYERS"
+    fi
+    echo "│"
+done
+echo "└────────────────────────────────────────────────────┘"
+
+# 汇总展示覆盖率（精确计算缺失层数）
+_TOTAL_CHECKS=$(( ${#AFFECTED_SYMBOLS[@]} * 4 ))
+_TOTAL_MISSING=0
+for _ul in "${_UNCOVERED_LAYERS[@]}"; do
+    # 每个元素是空格分隔的缺失层名，如 " DIRECT UPSTREAM"
+    for _word in $_ul; do _TOTAL_MISSING=$((_TOTAL_MISSING + 1)); done
+done
+_COVERED_CHECKS=$(( _TOTAL_CHECKS - _TOTAL_MISSING ))
+_PCT=$(( _COVERED_CHECKS * 100 / _TOTAL_CHECKS 2>/dev/null || echo 0))
+echo "覆盖率: $_PCT% ($_COVERED_CHECKS/$_TOTAL_CHECKS 符号×层)"
+echo ""
+
+if [ ${#_UNCOVERED_SYMBOLS[@]} -gt 0 ]; then
+    echo "[WARN] ${#_UNCOVERED_SYMBOLS[@]} 个符号缺少层覆盖，将进入 Step 3 补充生成"
+    for _idx in "${!_UNCOVERED_SYMBOLS[@]}"; do
+        echo "  → ${_UNCOVERED_SYMBOLS[$_idx]} 缺失:${_UNCOVERED_LAYERS[$_idx]}"
+    done
+    _NEED_FALLBACK=true
+fi
+
+# 历史回归测试摘要（用于 Step 5 报告）
+_HISTORICAL_TESTS=()
+for _idx in "${!TEST_FILES[@]}"; do
+    if [ "${TEST_LAYERS[$_idx]}" = "IMPORTED" ]; then
+        _HISTORICAL_TESTS+=("${TEST_FILES[$_idx]}")
+    fi
+done
+if [ ${#_HISTORICAL_TESTS[@]} -gt 0 ]; then
+    echo ""
+    echo "┌─ 历史回归测试池（已有测试，将重新验证） ─────────┐"
+    for _ht in "${_HISTORICAL_TESTS[@]}"; do
+        echo "│   $_ht"
+    done
+    echo "│   共 ${#_HISTORICAL_TESTS[@]} 个历史文件，将随本轮测试一起运行"
+    echo "└────────────────────────────────────────────────────┘"
+fi
+```
+
+### 4b.9 测试集汇总（强制桥接到 4c）
+
+> ⚠️ **入口检查禁止跳过**：进入 Step 4c 前，必须执行下面的汇总逻辑。汇总后的 `SELECTED_TESTS` 即为 Step 4c 唯一合法的运行列表。
+> ⚠️ **强制规则**：4b 查到的全部测试（新生成 DIRECT + 历史回归）必须全部加入 4c 的运行命令。AI 不得以任何理由只跑其中一部分。
+
+```bash
+# ===== 强制汇总：4b → 4c 桥接 =====
+echo ""
+echo "╔════════════════════════════════════════════════════════╗"
+echo "║  Step 4b → 4c 桥接：SELECTED_TESTS 强制预览           ║"
+echo "╚════════════════════════════════════════════════════════╝"
+
+NEW_GENERATED=()
+HISTORICAL_REGRESSION=()
+
+for _test in "${SELECTED_TESTS[@]}"; do
+    if echo "$_test" | grep -qE "^(2026|2025|2027)"; then
+        NEW_GENERATED+=("$_test")
+    else
+        HISTORICAL_REGRESSION+=("$_test")
+    fi
+done
+
+echo ""
+echo "[桥接] 总测试文件数: ${#SELECTED_TESTS[@]}"
+echo "  ├─ 本轮新生成: ${#NEW_GENERATED[@]} 个"
+for _t in "${NEW_GENERATED[@]}"; do echo "  │   $_t"; done
+echo "  └─ 历史回归验证: ${#HISTORICAL_REGRESSION[@]} 个"
+for _t in "${HISTORICAL_REGRESSION[@]}"; do echo "      $_t"; done
+echo ""
+echo "[强制规则] Step 4c 必须运行以上 ${#SELECTED_TESTS[@]} 个文件"
+echo "  禁止只跑新生成的 ${#NEW_GENERATED[@]} 个而跳过 ${#HISTORICAL_REGRESSION[@]} 个历史回归"
+echo "========================================================================"
+```
+
+### 4b.8 需手动验证项自动检测
+
+> 自动扫描受影响代码，识别无法自动测试的项目，生成带 Where/Why/How 的手动验证清单。
+
+```bash
+echo ""
+echo "┌─ 需手动验证项自动检测 ──────────────────────────────────┐"
+_MANUAL_ITEMS=()
+for _af in $(grep -vE '^(#|$)' .trellis/tests/.affected_files 2>/dev/null); do
+    [ -f "$_af" ] || continue
+    for _us in "${_UNCOVERED_SYMBOLS[@]}"; do
+        echo "│ [P0] 契约测试: $_us (依赖服务端环境)"
+        _MANUAL_ITEMS+=("P0|contract|$_us|$_af")
+    done
+    if grep -qE '(callback|webhook|notify|on_message|on_event)' "$_af" 2>/dev/null; then
+        _LINE=$(grep -nE '(callback|webhook)' "$_af" | head -1 | cut -d: -f1)
+        echo "│ [P0] 外部回调: $_af:$_LINE → 需 staging 验证"
+        _MANUAL_ITEMS+=("P0|callback|$_af:$_LINE|staging-required")
+    fi
+    if echo "$_af" | grep -qiE '(migration|flyway|schema\.sql|ddl)' 2>/dev/null; then
+        echo "│ [P1] DB 迁移: $_af → 需在 staging DB 执行"
+        _MANUAL_ITEMS+=("P1|migration|$_af|execute-on-staging-db")
+    fi
+    if grep -qE '(hasRole|isAdmin|@PreAuthorize|@Secured|authorize\()' "$_af" 2>/dev/null; then
+        _LINE=$(grep -nE '(hasRole|isAdmin|@PreAuthorize)' "$_af" | head -1 | cut -d: -f1)
+        echo "│ [P1] 权限检查: $_af:$_LINE → 多角色验证"
+        _MANUAL_ITEMS+=("P1|permission|$_af:$_LINE|multi-role-test")
+    fi
+    if grep -qE '(os\.path\.join|os\.sep|posixpath|os\.alt_sep)' "$_af" 2>/dev/null; then
+        _LINE=$(grep -nE '(os\.path\.join|os\.sep)' "$_af" | head -1 | cut -d: -f1)
+        echo "│ [P2] 跨平台: $_af:$_LINE → Win+Linux 验证"
+        _MANUAL_ITEMS+=("P2|cross-platform|$_af:$_LINE|verify-on-both-os")
+    fi
+    if grep -qE '(threading\.Lock|threading\.RLock|concurrent|race|shared.*dict)' "$_af" 2>/dev/null; then
+        _LINE=$(grep -nE '(threading\.Lock|concurrent)' "$_af" | head -1 | cut -d: -f1)
+        echo "│ [P2] 并发竞态: $_af:$_LINE → 多线程压力测试"
+        _MANUAL_ITEMS+=("P2|concurrency|$_af:$_LINE|multi-thread-test")
+    fi
+done
+[ ${#_MANUAL_ITEMS[@]} -eq 0 ] && echo "│ (未检测到需手动验证项)"
+echo "└─────────────────────────────────────────────────────────┘"
+
+# 持久化手动验证项到结果 JSON（供 Step 5 报告使用）
+if [ ${#_MANUAL_ITEMS[@]} -gt 0 ]; then
+    _MANUAL_JSON=""
+    for _mi in "${_MANUAL_ITEMS[@]}"; do
+        _MANUAL_JSON="$_MANUAL_JSON\"$_mi\","
+    done
+    _MANUAL_JSON="[${_MANUAL_JSON%,}]"
+    python -c "
+import json
+try:
+    with open('$RESULTS_FILE') as f: d = json.load(f)
+except: d = {}
+d['manual_verify'] = $_MANUAL_JSON
+with open('$RESULTS_FILE', 'w', encoding='utf-8') as f:
+    json.dump(d, f, ensure_ascii=False, indent=2)
+" 2>/dev/null || echo "  [WARN] 手动验证项写入 JSON 失败"
+fi
+```
+
+选择规则：
+- 全层覆盖（DIRECT + UPSTREAM + DOWNSTREAM + PEER），无论风险等级
+  （原因：LOW 风险也可能覆盖关键依赖路径，跳过任何一层都可能漏报回归）
+- 只跑 INDEX.md 和 test_index.db 中映射到的测试
+- INDEX.md 为空 → 降级为全量跑项目测试
+- 无命中测试 → 尝试 git 历史自动发现，仍无则提示并跳过
+
+#### 全覆盖回填（自动补充未覆盖符号）
+
+当 `_UNCOVERED_SYMBOLS` 不为空时，必须进入补充生成流程：
+
+```bash
+if [ "${#_UNCOVERED_SYMBOLS[@]}" -gt 0 ]; then
+    echo "=== 全覆盖回填：为 ${#_UNCOVERED_SYMBOLS[@]} 个未覆盖符号生成契约测试 ==="
+    
+    # 为每个未覆盖符号生成契约测试文件
+    for _sym in "${_UNCOVERED_SYMBOLS[@]}"; do
+        _ACTIVE_MONTH=".trellis/tests/generated/$(date +%Y/%m)"
+        _TEST_FILE="$_ACTIVE_MONTH/${_sym}ContractTest.${_FILE_EXT:-java}"
+        
+        # 契约测试模板（根据语言适配）
+        if [ "$_LANG" = "java" ]; then
+            cat > "$_TEST_FILE" << 'CONTRACT'
+/**
+ * 场景: 接口契约测试（依赖服务端环境，不可纯本地执行）
+ * Layer: UNTESTABLE（手动验证）
+ *
+ * 验证内容:
+ * 1. 方法签名正确（编译期检查）
+ * 2. 输入/输出参数类型验证
+ * 3. 内部调用的纯逻辑子方法验证（如有）
+ * 4. 调用链路完整性
+ */
+CONTRACT
+            echo "  [生成] $_TEST_FILE (契约测试，需手动验证)"
+        fi
+        
+        # 更新 INDEX.md
+        echo "$_sym in affected_file.java -> ${_sym}ContractTest.java::${_sym}_Contract [UNTESTABLE]" >> .trellis/tests/INDEX.md
+    done
+fi
+```
+
+> **核心原则**：不允许任何 affected_symbol 完全没有测试覆盖。不能提取纯逻辑 → 至少生成契约测试。
+
+### 4b.5 测试新鲜度检查（强制）
+
+> ⚠️ 在运行测试之前，必须验证每个测试文件对应的源文件代码是否已变更。
+> **如果源文件有新的 commit 但测试未更新，必须警告用户。**
+
+检查逻辑：
+
+```bash
+echo "=== 4b.5 CodeGraph 符号级新鲜度 + 自动同步检查 ==="
+_STALE_TESTS=()
+
+# 读取 affected_symbols（Step 1b 用 CodeGraph 分析产出的受影响符号列表）
+_AFFECTED_SYMBOLS=$(grep -vE '^(#|$)' .trellis/tests/.affected_symbols 2>/dev/null | tr '
+' '|')
+if [ -z "$_AFFECTED_SYMBOLS" ]; then
+    echo "  [SKIP] .affected_symbols 为空，跳过新鲜度检查"
+else
+    for _test in "${SELECTED_TESTS[@]}"; do
+        _FULL_PATH=$(find .trellis/tests/generated -name "$(basename "$_test")" -type f 2>/dev/null | head -1)
+        [ -z "$_FULL_PATH" ] && continue
+        
+        # 读取 TestedSource 标记: "TestedSource: upsertSyncRecords@a614c65"
+        _SOURCE=$(head -30 "$_FULL_PATH" | grep "TestedSource:" | head -1)
+        [ -z "$_SOURCE" ] && echo "  [SKIP] $_test: 无 TestedSource 标记" && continue
+        
+        # 提取符号名（TestedSource 中的符号名，而非文件路径）
+        # 格式: "TestedSource: upsertSyncRecords@a614c65" → "upsertSyncRecords"
+        _SYMBOL=$(echo "$_SOURCE" | sed 's/.*TestedSource:[ ]*//' | sed 's/@.*//' | xargs)
+        
+        # CodeGraph 符号级判断：该符号是否在 affected_symbols 中？
+        # 如果在 → 本次变更直接影响该符号 → 测试过期，需重新生成
+        # 如果不在 → 即使文件 hash 变了，符号逻辑未变 → 测试仍有效
+        if echo "$_AFFECTED_SYMBOLS" | grep -q "$_SYMBOL"; then
+            echo "  ⚠️  测试过期: $_test (符号 $_SYMBOL 被本次变更影响)"
+            echo "     → 标记为 stale，将重新生成"
+            _STALE_TESTS+=("$_test")
+        else
+            echo "  ✅ $_test (fresh — 符号 $_SYMBOL 未受影响)"
+        fi
+    done
+fi
+
+# 自动同步：删除过期测试文件，进入 Step 3 重新生成
+if [ ${#_STALE_TESTS[@]} -gt 0 ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  发现 ${#_STALE_TESTS[@]} 个过期测试，自动同步到最新代码"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # 从 DB 和文件系统同时删除过期测试
+    _PY_CMD=${_PY_CMD:-python}
+    _DB_SCRIPT=".trellis/scripts/test_db.py"
+    for _stale in "${_STALE_TESTS[@]}"; do
+        _FULL=$(find .trellis/tests/generated -name "$(basename "$_stale")" -type f 2>/dev/null | head -1)
+        [ -n "$_FULL" ] && python -c "import os; os.remove(r'$_FULL')" 2>/dev/null && echo "  [DELETE] $_stale"
+        # 同步从 DB 删除映射
+        $_PY_CMD $_DB_SCRIPT delete "$_stale" 2>/dev/null || true
+    done
+    
+    # 标记需要重新生成
+    echo "  → 进入 Step 3 重新生成测试（基于最新代码）..."
+    _NEED_REGENERATE=true
+    _NEED_REGENERATE=true
+fi
+```
+
+### 4b.6 测试缓存加速（跳过未变更的测试）
+> 如果测试文件和被测源文件从上次运行后都未修改，跳过该测试。
+
+```bash
+_CACHE_DIR=".trellis/tests/.cache"
+mkdir -p "$_CACHE_DIR"
+_FAST_TESTS=()
+for _test in "${SELECTED_TESTS[@]}"; do
+    _FULL_PATH=$(find .trellis/tests/generated -name "$(basename "$_test")" -type f 2>/dev/null | head -1)
+    [ -z "$_FULL_PATH" ] && _FAST_TESTS+=("$_test") && continue
+    
+    # 获取测试文件和源文件的最后修改时间
+    _TEST_MTIME=$(python -c "import os; print(int(os.path.getmtime('$_FULL_PATH')))" 2>/dev/null || echo 0)
+    _SOURCE=$(head -30 "$_FULL_PATH" | grep "TestedSource:" | head -1)
+    _SRC_FILE=$(echo "$_SOURCE" | sed 's/.*TestedSource:[ ]*//' | sed 's/@.*//')
+    _SRC_MTIME=$(stat -c %Y "$_SRC_FILE" 2>/dev/null || echo 0)
+    
+    # 对比上次运行的缓存
+    _CACHE_HASH="${_test}_mtime"
+    _CACHED=$(cat "$_CACHE_DIR/$_CACHE_HASH" 2>/dev/null || echo "0 0")
+    _CACHED_TEST=$(echo "$_CACHED" | cut -d' ' -f1)
+    _CACHED_SRC=$(echo "$_CACHED" | cut -d' ' -f2)
+    
+    if [ "$_CACHED_TEST" = "$_TEST_MTIME" ] && [ "$_CACHED_SRC" = "$_SRC_MTIME" ]; then
+        echo "  [CACHED] $_test — 未变更，跳过"
+    else
+        _FAST_TESTS+=("$_test")
+        echo "$_TEST_MTIME $_SRC_MTIME" > "$_CACHE_DIR/$_CACHE_HASH"
+    fi
+done
+SELECTED_TESTS=("${_FAST_TESTS[@]}")
+```
+
+### 4b.7 Spec/PRD 合规检查（强制冲突分析）
+
+> 反查每个测试关联的 spec/PRD 规范，验证修改未违反历史规则。
+> **禁止仅做 hash 比对**——必须做语义级冲突分析：判断"这条 spec 规则是否与本次代码变更冲突"。
+
+```bash
+_PY_CMD=${_PY_CMD:-python}
+_DB_SCRIPT=".trellis/scripts/test_db.py"
+echo "=== 4b.7 Spec/PRD 合规检查（语义冲突分析）==="
+
+# 步骤1: 收集本轮变更符号和变更时间
+_CHANGE_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+_CHANGE_TIMESTAMP=$(git log -1 --format=%ct 2>/dev/null || echo 0)
+echo "  变更版本: $_CHANGE_COMMIT | 变更时间戳: $_CHANGE_TIMESTAMP"
+
+# 步骤2a: AI 判断哪些 spec 与爆炸半径相关
+# 不用 bash grep 写死匹配规则，由 AI 理解项目结构后自行判定
+_SPEC_DIR=".trellis/spec"
+_NEW_SPECS=0
+if [ -d "$_SPEC_DIR" ] && [ -n "$(find "$_SPEC_DIR" -name "*.md" -type f 2>/dev/null | head -1)" ]; then
+    echo "  [SPEC] 发现 .trellis/spec/ 目录，AI 正在判断以下 spec 是否与爆炸半径相关..."
+    echo "  受影响文件:"
+    grep -vE '^(#|$)' .trellis/tests/.affected_files 2>/dev/null | sed 's/^/    /'
+    echo "  受影响符号: ${AFFECTED_SYMBOLS[*]}"
+    echo "  Spec 目录:"
+    find "$_SPEC_DIR" -name "*.md" -type f 2>/dev/null | sed 's/^/    /'
+    echo ""
+    echo "  → AI 需逐文件判断: 该 spec 的内容是否约束或描述了受影响符号的行为?"
+    echo "  → 判定为相关的 spec，需验证其规则是否被本轮变更违反"
+    echo "  → 判定为无关的 spec，跳过"
+    echo "  → 判定结果将写入 .spec_conflict_report"
+fi
+    [ "$_NEW_SPECS" -gt 0 ] && echo "    ⚠️  发现 $_NEW_SPECS 个未绑定 spec，建议在测试中添加 SpecRef 引用"
+fi
+echo ""
+
+# 步骤2b: 从 DB 反查已有绑定的 spec 规则
+_SPEC_RESULT=$($_PY_CMD $_DB_SCRIPT find-specs "${SELECTED_TESTS[@]}" 2>/dev/null)
+_CONFLICT_COUNT=0
+_RULE_COUNT=0
+_CONFLICT_REPORT=""
+
+if [ -n "$_SPEC_RESULT" ]; then
+    echo "  已绑定规范（通过测试文件 SpecRef 引用）:"
+    echo "$_SPEC_RESULT" | while IFS='|' read -r _sf _rp _rs _ch _rel; do
+        [ -z "$_sf" ] && continue
+        _RULE_COUNT=$((_RULE_COUNT + 1))
+        _SPEC_PATH=".trellis/spec/$_sf"
+        
+        # 2a. 获取 spec 规则的提交时间（该文件最近修改时间）
+        _SPEC_TIMESTAMP=0
+        if [ -f "$_SPEC_PATH" ]; then
+            _SPEC_TIMESTAMP=$(git log -1 --format=%ct "$_SPEC_PATH" 2>/dev/null || echo 0)
+        fi
+        
+        # 2b. 语义冲突分析（不再是简单的 hash 比对）
+        # 规则: 如果 spec 规则写于变更之后，新代码可能尚未考虑该规则
+        #       如果 spec 规则写于变更之前，需要检查代码是否仍遵守
+        _CONFLICT_STATUS="CONFIRMED（合规）"
+        if [ "$_SPEC_TIMESTAMP" -gt "$_CHANGE_TIMESTAMP" ] 2>/dev/null; then
+            _CONFLICT_STATUS="⚠️  WARN: spec 规则($(date -d @$_SPEC_TIMESTAMP '+%m-%d' 2>/dev/null || echo '?')) 晚于变更($(date -d @$_CHANGE_TIMESTAMP '+%m-%d' 2>/dev/null || echo '?'))，代码可能未考虑该规则"
+            _CONFLICT_COUNT=$((_CONFLICT_COUNT + 1))
+        else
+            # 2c. 对于较老的 spec 规则，用关键词判断语义是否相悖
+            #     读取 spec 文件中的约束关键词，与变更代码对比
+            if [ -f "$_SPEC_PATH" ]; then
+                _RULE_TEXT=$(grep -A5 "$_rp" "$_SPEC_PATH" 2>/dev/null | head -10)
+                # 检查是否包含约束性词汇（禁止/必须/不允许...）
+                if echo "$_RULE_TEXT" | grep -qiE "(禁止|不允许|不能|must not|shall not|never)"; then
+                    _CONFLICT_STATUS="⚠️  REVIEW: 含约束性规则，建议人工确认代码未违反"
+                    _CONFLICT_COUNT=$((_CONFLICT_COUNT + 1))
+                fi
+            fi
+        fi
+        
+        echo "    spec: $_sf::$_rp => $_rs [$_rel]"
+        echo "    spec提交: $(date -d @$_SPEC_TIMESTAMP '+%m-%d %H:%M' 2>/dev/null || echo '?') | 变更提交: $(date -d @$_CHANGE_TIMESTAMP '+%m-%d %H:%M' 2>/dev/null || echo '?')"
+        echo "    冲突分析: $_CONFLICT_STATUS"
+        _CONFLICT_REPORT="$_CONFLICT_REPORT
+| $_sf::$__rp | $_rs | $(date -d @$_SPEC_TIMESTAMP '+%m-%d' 2>/dev/null || echo '?') | $_CONFLICT_STATUS |"
+    done
+else
+    echo "  无关联的 spec/PRD 规则"
+fi
+
+# 步骤3: 写冲突报告到文件
+cat > ".trellis/tests/.spec_conflict_report" << 'CONFEOF'
+# Spec/PRD 合规检查报告
+# 变更版本: $_CHANGE_COMMIT
+# 生成时间: $(date '+%Y-%m-%d %H:%M')
+
+| Spec 文件 | 规则 | 规则日期 | 冲突分析 |
+|----------|------|---------|---------|
+$_CONFLICT_REPORT
+
+共 $_RULE_COUNT 条规则，$_CONFLICT_COUNT 条需关注
+CONFEOF
+
+# 步骤4: 冲突数 > 0 时在报告中标记，但不阻止流程（让用户判断）
+if [ "$_CONFLICT_COUNT" -gt 0 ]; then
+    echo "  => $_CONFLICT_COUNT 条规则需关注，详情见 .trellis/tests/.spec_conflict_report"
+fi
+```
+
+### 4c. 运行选定测试
+
+> ⚠️ **入口检查**：进入本步前必须已完成 Step 4b.9 桥接预览。`SELECTED_TESTS` 必须包含新生成 + 历史回归全部文件，AI 不得自行减少运行列表。
+> ⚠️ **预览检查**：在运行测试命令前，必须用 `echo "SELECTED_TESTS=${SELECTED_TESTS[@]}"` 输出完整的测试文件列表（含历史回归文件数量），并与 Step 4b.9 桥接输出对比，确保完全一致。如果不一致，必须退回 Step 4b 重新选择。
+
+```bash
+# shopt skipped (not available on Windows) 2>/dev/null
+
+# 获取运行器类型（尝试 python3 → python → py）
+_PY_CMD="python"
+command -v python3 >/dev/null 2>&1 && _PY_CMD="python3"
+command -v py >/dev/null 2>&1 && _PY_CMD="py -3"
+
+# 速度基准：记录测试运行开始时间
+_START_TIME=$(date +%s)
+_TEST_COUNT=0
+_PASS_COUNT=0
+
+_RUNNER=$("$_PY_CMD" -c "
+import json,sys
+try:
+    print(json.load(open('.trellis/tests/config.json')).get('runner',''))
+except: print('')
+" 2>/dev/null)
+
+# 从 SELECTED_TESTS 提取测试文件列表
+_TEST_FILES=$(printf "%s\n" "${SELECTED_TESTS[@]}" | sort -u)
+
+case "$_RUNNER" in
+  maven)
+    _CLASSES=$(echo "$_TEST_FILES" | sed 's/.*\///;s/\.java//' | tr '\n' ',')
+    mvn test -Dtest="$_CLASSES" -q 2>&1 | tail -20
+    ;;
+  gradle)
+    _CLASSES=$(echo "$_TEST_FILES" | sed 's/.*\///;s/\.\(java\|kt\)//' | tr '\n' ',')
+    ./gradlew test --tests "$_CLASSES" -q 2>&1 | tail -20
+    ;;
+  cargo)
+    cargo test 2>&1 | tail -20
+    ;;
+  go)
+    # Go: 用包路径
+    for _f in $_TEST_FILES; do
+      # 文件已复制到项目根目录，用 go test . 即可
+      go test -v 2>&1 | tail -20
+      break  # 一次 go test . 跑所有本包测试
+    done
+    ;;
+  ctest)
+    ctest --output-on-failure 2>&1 | tail -20
+    ;;
+  node)
+    echo "$_TEST_FILES" | xargs npx jest --silent 2>&1 | tail -20
+    ;;
+  python)
+    # 读取 PYTHONPATH
+    _PYPATH=$("$_PY_CMD" -c "
+import json,sys
+try:
+    print(json.load(open('.trellis/tests/config.json')).get('python_paths',''))
+except: print('')
+" 2>/dev/null)
+    export PYTHONPATH="${_PYPATH:-$PYTHONPATH}"
+
+    # 收集测试文件路径
+    A_TESTS=(); B_TESTS=(); C_TESTS=()
+    while IFS= read -r _f; do
+      [ -z "$_f" ] && continue
+      _FULL=$(find tests .trellis/tests -name "$(basename "$_f")" -type f 2>/dev/null | head -1)
+      [ -z "$_FULL" ] && continue
+      if grep -q "sys.exit" "$_FULL" 2>/dev/null; then B_TESTS+=("$_FULL")
+      elif echo "$_f" | grep -qiE "extreme|race|setup_mitm|win_"; then C_TESTS+=("$_FULL")
+      else A_TESTS+=("$_FULL"); fi
+    done
+
+    # A组：pytest 并行（先检查，提示安装而非静默安装）
+    _PY=${_PY_CMD:-python}
+    if [ ${#A_TESTS[@]} -gt 0 ]; then
+      if $_PY -m pytest -n auto --help >/dev/null 2>&1; then
+        $_PY -m pytest "${A_TESTS[@]}" -n auto --tb=line -q &
+        A_PID=$!
+      else
+        echo "[提示] 安装 pytest-xdist 可加速: pip install pytest-xdist"
+        $_PY -m pytest "${A_TESTS[@]}" --tb=line -q &
+        A_PID=$!
+      fi
+    fi
+
+    # B组：独立进程（用 PID 追踪替代 jobs -r）
+    B_PIDS=()
+    for f in "${B_TESTS[@]}"; do
+      $_PY "$f" &
+      B_PIDS+=($!)
+      # 控制并发上限
+      while [ ${#B_PIDS[@]} -ge 4 ]; do
+        for pid in "${B_PIDS[@]}"; do
+          kill -0 "$pid" 2>/dev/null || B_PIDS=(${B_PIDS[@]/$pid})
+        done
+        [ ${#B_PIDS[@]} -ge 4 ] && sleep 1
+      done
+    done
+    wait
+
+    # C组：特殊环境串行
+    for f in "${C_TESTS[@]}"; do
+      echo "--- [C] $f ---"
+      python "$f" 2>&1 | tail -3 || echo "[SKIP] $f 需要特殊环境"
+    done
+
+    # 等待 A 组完成
+    [ -n "$A_PID" ] && wait "$A_PID" 2>/dev/null
+    ;;
+  vitest)
+    npx vitest run 2>&1 | tail -20
+    ;;
+  kotlin)
+    for _f in .trellis/tests/generated/*.kt; do [ -f "$_f" ] && kotlin -cp /tmp/classes "$(basename "$_f" .kt)" 2>&1 | tail -10; done
+    ;;
+  swift)
+    swift test 2>&1 | tail -20
+    ;;
+  dart)
+    dart test 2>&1 | tail -20
+    ;;
+  php)
+    for _f in .trellis/tests/generated/*Test.php; do [ -f "$_f" ] && php -f "$_f" 2>&1 | tail -10; done
+    ;;
+  ruby)
+    for _f in .trellis/tests/generated/*_test.rb; do [ -f "$_f" ] && ruby "$_f" 2>&1 | tail -10; done
+    ;;
+  dotnet)
+    dotnet test 2>&1 | tail -20
+    ;;
+  elixir)
+    mix test 2>&1 | tail -20
+    ;;
+  ghc)
+    for _f in .trellis/tests/generated/*_test.hs; do [ -f "$_f" ] && runhaskell "$_f" 2>&1 | tail -10; done
+    ;;
+  scala)
+    sbt test 2>&1 | tail -20
+    ;;
+  perl)
+    for _f in .trellis/tests/generated/*.t; do [ -f "$_f" ] && perl "$_f" 2>&1 | tail -10; done
+    ;;
+  lua)
+    for _f in .trellis/tests/generated/*_test.lua; do [ -f "$_f" ] && lua "$_f" 2>&1 | tail -10; done
+    ;;
+  Rscript)
+    for _f in .trellis/tests/generated/*_test.r; do [ -f "$_f" ] && Rscript "$_f" 2>&1 | tail -10; done
+    ;;
+  bash)
+    for _f in .trellis/tests/generated/*_test.sh; do [ -f "$_f" ] && bash "$_f" 2>&1 | tail -10; done
+    ;;
+  generic|*)
+    echo "  [INFO] 通用模式: 尝试自动检测运行器"
+    for _f in .trellis/tests/generated/*; do
+        [ -f "$_f" ] || continue
+        case "$_f" in
+            *.py)  python "$_f" 2>&1 | tail -10 ;;
+            *.js)  node "$_f" 2>&1 | tail -10 ;;
+            *.ts)  npx ts-node "$_f" 2>&1 | tail -10 || node --experimental-strip-types "$_f" 2>&1 | tail -10 ;;
+            *.rb)  ruby "$_f" 2>&1 | tail -10 ;;
+            *.php) php -f "$_f" 2>&1 | tail -10 ;;
+            *.sh)  bash "$_f" 2>&1 | tail -10 ;;
+            *.lua) lua "$_f" 2>&1 | tail -10 ;;
+            *.pl)  perl "$_f" 2>&1 | tail -10 ;;
+            *.r)   Rscript "$_f" 2>&1 | tail -10 ;;
+            *.java) javac -encoding utf-8 -d /tmp/classes "$_f" 2>&1 && java -cp /tmp/classes "$(basename "$_f" .java)" 2>&1 | tail -10 ;;
+            *.kt)  kotlinc -d /tmp/classes "$_f" 2>&1 && kotlin -cp /tmp/classes "$(basename "$_f" .kt)" 2>&1 | tail -10 ;;
+            *.dart) dart run "$_f" 2>&1 | tail -10 ;;
+            *.swift) swift "$_f" 2>&1 | tail -10 ;;
+            *.hs)  runhaskell "$_f" 2>&1 | tail -10 ;;
+            *.scala) scala "$_f" 2>&1 | tail -10 ;;
+            *.exs) elixir "$_f" 2>&1 | tail -10 ;;
+            *)     echo "  [SKIP] $_f: 未知类型，请手动运行" ;;
+        esac
+    done
+    # 速度统计
+    _END_TIME=$(date +%s)
+    _DURATION=$((_END_TIME - _START_TIME))
+    echo "  [TIME] 测试运行耗时: ${_DURATION}s"
+    echo "  [TIME] 对比基准: 串行生成约 ${_DURATION}x 秒 (N个子Agent并行 ≈ ${_DURATION}s 更快)"
+    ;;
+esac
+
+# 保存测试结果供 Step 5 报告使用
+_PY_CMD=${_PY_CMD:-python}
+_SAVED_SYMBOL="$(grep -vE '^(#|$)' .trellis/tests/.affected_symbols 2>/dev/null | head -1)"
+_END_TIME=$(date +%s)
+_TOTAL_DURATION=$((_END_TIME - _START_TIME))
+PYTHONIOENCODING=utf-8 $_PY_CMD .trellis/scripts/test_report.py "$_SAVED_SYMBOL" \
+    --save-results "$_TEST_COUNT" "$_PASS_COUNT" "$((_TEST_COUNT - _PASS_COUNT))" "0" "$_TOTAL_DURATION" \
+    2>/dev/null || true
+```
+
+### 4d. 失败诊断
+
+```bash
+<detected_test_command>
+```
+
+失败分析：
+```
+失败测试: OrderServiceTest.testCancelOrder_Refund()
+失败信息: AssertionError: expected 100.00 but got 99.99
+可能原因:
+  [ ] 测试用例写错
+  [ ] 被测试源码有 bug
+  [ ] 测试环境问题
+```
+
+### 4e. 自动修复循环（全量重跑，/goal 驱动直到通过）
+
+> ⚠️ **修复后必须全量重跑，不允许只跑失败测试。** 用 `/goal` 机制（本地 goal 文件）跟踪"全部测试通过"为持久约束，循环直到满足才能进入 Step 5。
+
+**强制规则**：
+- 入口检查：必须先有 FAILED_LIST（4d 输出）才能进入
+- 出口检查：SELECTED_TESTS（新生成+历史回归）必须全部通过，否则退回
+- AI 不得以"只有少量失败"或"失败不相关"为由跳过全量重跑
+- **避无限循环**：连续 5 轮 FAILED_LIST 无减少 → 展示全部修复尝试给用户，暂停等指令
+
+**`/goal` 本地目标文件机制**：
+```
+# 文件: .trellis/tests/.fix_goal
+# 进入 4e 时创建，全部通过时删除
+{
+  "goal": "全部测试通过",
+  "total": N,
+  "passed": 0,
+  "failed": [],
+  "round": 0
+}
+# Step 5 入口检查: .fix_goal 存在 → 目标未达成，禁止生成报告
+```
+
+```
+auto_fix_log = []
+round = 1
+GOAL_FILE = ".trellis/tests/.fix_goal"
+
+# 初始化 goal（记录 SELECTED_TESTS 列表为"必须全部通过"的目标）
+python -c "import json; json.dump({'goal':'全部测试通过','total':len(SELECTED_TESTS),'passed':0,'failed':[],'round':0}, open(GOAL_FILE,'w'))"
+
+while True:
+  1. 分析每个失败根因，分类：
+     a) 测试写错 → 直接修复测试
+     b) 源码有 bug → 展示 diff 并等用户确认后修复
+     c) 环境问题 → 修复环境配置
+  2. 记录失败列表 FAILED_LIST
+  3. git diff --quiet || git stash push -m "fix-before-round-$round"
+  4. 执行修复
+  5. [全量重跑] 重新运行 SELECTED_TESTS（全部，而非只跑 FAILED_LIST）
+  6. 更新 goal 状态（写回 .fix_goal）
+  7. 记录修复内容到 auto_fix_log;  round += 1
+  8. if 全部通过: 删除 .fix_goal; break
+     # 否则 continue（无上限，直到通过）
+```
+
+### 4e.5 不稳定测试自动重试（Flaky Test 容错）
+
+> 当测试失败时，不确定是真正 bug 还是环境波动，自动重试一次再下结论。
+
+```bash
+# 对每个失败测试，最多重试 1 次（排除环境因素）
+for _FAILED in "${FAILED_LIST[@]}"; do
+    echo "  [RETRY] $_FAILED (第1次重试)"
+    # 重跑该测试
+    if <rerun_single_test "$_FAILED">; then
+        echo "  ✅ 重试通过，标记为环境波动"
+        _RETRY_PASS+=("$_FAILED")
+    else
+        echo "  ❌ 重试仍失败，确认真 bug"
+        _CONFIRMED_FAIL+=("$_FAILED")
+    fi
+done
+# 重试通过的不算失败
+echo "环境波动: ${#_RETRY_PASS[@]}, 确认失败: ${#_CONFIRMED_FAIL[@]}"
+```
+
+安全规则：
+- 修改生产代码前展示 diff 并确认
+- 每轮修复失败后：`git stash pop` 恢复 pre-fix 状态（而非 `git checkout -- .`）
+- 全部修复通过后：`git stash drop` 清理临时 stash
+
+### 4f. 验证循环（修复后重索引 + 重跑全量）
+
+```
+all_passed = false
+VERIFY_ROUND = 1
+MAX_VERIFY = 2
+
+while VERIFY_ROUND <= MAX_VERIFY:
+  → Step 3c（更新 INDEX.md，重扫 generated/）
+  → Step 1b（重跑影响分析：修复后的代码可能有新符号）
+  → Step 4b（重新查询 INDEX.md + 层级过滤）
+  → Step 4c（运行全部新选中的测试）
+
+  if 全部通过:
+    all_passed = true
+    break
+  else:
+    → Step 4e（自动修复新失败）
+    if 修复失败:
+      break
+    VERIFY_ROUND += 1
+
+if all_passed:
+  → 继续到 Step 4g/5
+else if VERIFY_ROUND > MAX_VERIFY:
+  → 标记"经过 $MAX_VERIFY 轮验证仍有波动，建议人工介入"
+else:
+  → 标记"验证循环中修复失败，需人工介入"
+```
+
+### 4g. 覆盖率（如框架支持）
+
+```bash
+<coverage_command>
+```
+
+---
+
+## Step 5: 交付报告
+
+> **入口检查（强制）**：必须先确认 `.trellis/tests/.fix_goal` 不存在。存在表示 4e 目标未达成（仍有失败测试），禁止生成报告，退回 Step 4e。
+> ```bash
+> if [ -f ".trellis/tests/.fix_goal" ]; then
+>     echo "[BLOCKED] /goal 未达成: 仍有失败测试。退回 Step 4e。"
+>     exit 1
+> fi
+> ```
+
+> **报告生成规则**（强制）：
+> 1. 必须使用**子 Agent** 对测试结果进行总结（不能只打印原始数据）
+> 2. 子 Agent 负责分析：测试覆盖率、质量评分、风险摘要
+> 3. 报告必须展示：历史回归测试验证结果（文件路径+验证内容）、Spec验证状态、爆炸半径
+> 4. 如 `test_report.py` 不存在则使用报告的纯文本模板
+
+### 5a. 子 Agent 报告总结（强制）
+
+用子 Agent 对测试运行结果进行智能总结：
+
+```markdown
+启动子 Agent（run_in_background=false — 需要其输出才能继续）：
+Agent(
+  description="总结测试报告",
+  subagent_type="general-purpose",
+  prompt="分析以下 trellis-test 结果数据，生成简洁的汇总报告：
+
+  受影响符号: {{SYMBOL_LIST}}
+  风险等级: {{RISK_LEVEL}}
+  测试结果:
+  {{TEST_RESULTS}}
+  历史回归测试（运行了哪些已有测试）:
+  {{HISTORICAL_TESTS}}
+  Spec验证:
+  {{SPEC_VALIDATION}}
+  安全审计:
+  {{SECURITY_AUDIT}}
+  自动修复记录:
+  {{FIX_LOG}}
+
+请生成结构化总结，包含:
+1. 总体结论（PASS/FAIL，通过率，耗时）
+2. 风险摘要（哪层最重要）
+3. 历史回归验证摘要（跑了哪些已有测试，结果如何）
+4. Spec合规摘要
+5. 覆盖缺口（如果有）
+6. 需手动验证项
+格式要美观，用 ASCII 框线。
+"
+)
+```
+
+### 5b. 报告模板（主 Agent 生成备用）
+
+如果 test_report.py 和子 Agent 均不可用，使用以下模板：
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                   trellis-test 最终报告                           ║
+║           测试自动生成与验证 — 完整执行周期                        ║
+╚══════════════════════════════════════════════════════════════════╝
+
+┌─ 总体摘要 ──────────────────────────────────────────────────────┐
+│ 变更: OrderService.java (+12/-3)                                │
+│ 风险等级: HIGH                                                  │
+│ 执行时间: 2026-07-28 14:30:00 → 14:32:15 (2m15s)               │
+│ 测试结果: ████████████████████████████████░░░ 13/13 PASS (100%)  │
+│ 状态: ✅ 全部通过                                                │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 爆炸半径分析 ──────────────────────────────────────────────────┐
+│ Layer           │ Symbol                │ File (行号)    │ Risk  │
+│─────────────────┼───────────────────────┼────────────────┼───────│
+│ 🔵 DIRECT      │ cancelOrder()         │ OrderSvc:142   │ HIGH  │
+│ 🟡 UPSTREAM    │ deleteOrder()         │ OrderCtrl:85   │ MED   │
+│ 🟡 UPSTREAM    │ batchDel()            │ AdminOrd:201   │ MED   │
+│ 🔴 DOWNSTREAM  │ refund()              │ PaymentSvc:55  │ MED   │
+│ 🟣 PEER        │ modifyOrder()         │ OrderSvc:200   │ LOW   │
+│ ⚪ INTERFACE   │ IOrderService          │ (2 impls)      │ MED   │
+│─────────────────┼───────────────────────┼────────────────┼───────│
+│ 影响源: codegraph_explore + gitnexus impact                    │
+│ DB 符号映射: test_index.db — 6 符号, 5 层, 3 历史关联           │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 测试结果（按层） ──────────────────────────────────────────────┐
+│                                                              │
+│ 🔵 DIRECT Layer — OrderService.cancelOrder()                 │
+│  ├─ OrderServiceDirectTest.java                              │
+│  │  ├─ ✅ test_cancelOrder_Normal_ShouldRefund               │
+│  │  ├─ ✅ test_cancelOrder_Shipped_ShouldReject              │
+│  │  └─ ✅ test_cancelOrder_PayFail_ShouldRollback            │
+│  └─ 结果: 3/3 PASS (0.32s)                                   │
+│                                                              │
+│ 🟡 UPSTREAM Layer — 调用方回归                                 │
+│  ├─ OrderControllerRegTest.java                               │
+│  │  └─ ✅ test_deleteOrder_Cancel_ShouldPropagate            │
+│  ├─ AdminOrderServiceRegTest.java                             │
+│  │  └─ ✅ test_batchDel_PartialFail_ShouldContinue           │
+│  └─ 结果: 2/2 PASS (0.18s)                                   │
+│                                                              │
+│ 🔴 DOWNSTREAM Layer — PaymentService.refund()                │
+│  ├─ PaymentServiceMockTest.java                               │
+│  │  └─ ✅ test_cancelOrder_CallsRefund_WithCorrectAmount     │
+│  └─ 结果: 1/1 PASS (0.09s)                                   │
+│                                                              │
+│ 🟣 PEER Layer — OrderService.modifyOrder()                   │
+│  ├─ OrderServicePeerTest.java                                 │
+│  │  └─ ✅ test_modifyOrder_State_NotAffectedByCancel         │
+│  └─ 结果: 1/1 PASS (0.11s)                                   │
+│                                                              │
+│ ├─ 总计: 7/7 PASS (0.70s)                                   │
+│ └─ 自动修复轮次: 0 (无需修复)                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 历史回归测试验证 ──────────────────────────────────────────────┐
+│ 测试文件 (路径)                        │ 验证内容        │ 结果  │
+│────────────────────────────────────────┼─────────────────┼───────│
+│ java/OrderServiceTest.java             │ cancelOrder 场景│ ✅    │
+│   test_cancelOrder_Shipped_ShouldFail  │ 已发货不可取消  │ PASS  │
+│   test_cancelOrder_NotFound_ShouldThrow│ 订单不存在      │ PASS  │
+│ java/PaymentServiceTest.java           │ refund 退款     │ ✅    │
+│   test_refund_Normal_ShouldSuccess     │ 正常退款路径    │ PASS  │
+│   test_refund_Duplicate_ShouldReject   │ 重复退款        │ PASS  │
+│ java/OrderControllerTest.java          │ deleteOrder     │ ✅    │
+│   test_deleteOrder_Cancel_ShouldWork   │ 调用链完整      │ PASS  │
+│────────────────────────────────────────┼─────────────────┼───────│
+│ 来源: test_db.py find <symbol>         │ 新鲜度: fresh ✅ │
+│ DB 查询: 3 文件, 5 方法, 6 映射记录    │                │       │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ Spec/PRD 合规验证 ──────────────────────────────────────────────┐
+│ Spec 文件                        │ 规则                  │ 状态  │
+│──────────────────────────────────┼───────────────────────┼───────│
+│ spec/order/order-cancel.md §3.1  │ 已发货不可取消        │ ✅    │
+│ spec/order/order-cancel.md §3.2  │ 取消必须记录原因      │ ✅    │
+│ spec/order/order-cancel.md §4    │ 退款金额≤实付         │ ✅    │
+│ spec/payment/refund-flow.md §2.1 │ 退款不超过 3 次       │ ✅    │
+│──────────────────────────────────┼───────────────────────┼───────│
+│ PRD: tasks/TASK-123/prd.md §4    │ 取消流程设计          │ ✅    │
+│ 来源: test_db.py find-specs      │ DB: 4 规则,全部合规   │       │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 代码新鲜度检查 ────────────────────────────────────────────────┐
+│ 测试文件                      │ 生成版本 │ 当前版本 │ 状态      │
+│───────────────────────────────┼──────────┼──────────┼───────────│
+│ OrderServiceDirectTest.java   │ a1b2c3d  │ a1b2c3d  │ fresh ✅  │
+│ OrderControllerRegTest.java   │ a1b2c3d  │ a1b2c3d  │ fresh ✅  │
+│ PaymentServiceMockTest.java   │ a1b2c3d  │ a1b2c3d  │ fresh ✅  │
+│ OrderServicePeerTest.java     │ a1b2c3d  │ a1b2c3d  │ fresh ✅  │
+│ OrderServiceTest.java (hist)  │ e5f6g7h  │ a1b2c3d  │ STALE ⚠️  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 覆盖缺口分析 ──────────────────────────────────────────────────┐
+│ 未覆盖符号            │ 原因                    │ 处理           │
+│───────────────────────┼─────────────────────────┼────────────────│
+│ OrderService          │ 依赖 OA RecordSet       │ 契约测试(手动) │
+│   .validateCancel()   │ 无法纯本地执行          │                │
+│                                                              │
+│ 共 1 个符号未覆盖 → 已生成契约测试,标记 [手动验证]            │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 安全审计结果 ──────────────────────────────────────────────────┐
+│ 检查项                │ 状态    │ 详情                          │
+│───────────────────────┼─────────┼───────────────────────────────│
+│ 硬编码密钥            │ ✅ 通过 │ 未发现                        │
+│ 敏感信息泄露          │ ✅ 通过 │ 未发现                        │
+│ SQL 注入风险          │ ✅ 通过 │ 使用参数化查询                │
+│ 权限检查              │ ⚠️ 注意 │ 需人工确认用户角色验证        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 自动修复记录 ──────────────────────────────────────────────────┐
+│ 轮次 │ 文件                      │ 修复内容          │ 结果    │
+│──────┼───────────────────────────┼───────────────────┼─────────│
+│ 无   │ —                         │ —                 │ —       │
+│ 说明: 本轮无需自动修复, 所有测试首次运行即通过                  │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 需手动验证项 ──────────────────────────────────────────────────┐
+│ 以下项目无法自动验证，需人工确认后才能标记完成。                    │
+│ 每项包含: 位置(文件:行) | 原因 | 验证步骤                          │
+│                                                                     │
+│ 【契约测试】依赖服务端环境，不可本地执行                            │
+│  [ ] 1. UNTESTABLE: OrderService.validateCancel()                   │
+│        ├─ Where:  src/main/java/OrderService.java:155               │
+│        ├─ Why:   依赖 OA RecordSet，无法纯本地模拟                  │
+│        ├─ How:   部署到 OA 环境后在管理后台触发取消流程             │
+│        └─ Ref:   测试文件: 2026/07/OrderServiceContractTest.java    │
+│                                                                     │
+│ 【外部回调】第三方系统交互，无法在单元测试中覆盖                    │
+│  [ ] 2. 外部支付回调                                                 │
+│        ├─ Where:  src/main/java/PaymentCallback.java:22-45          │
+│        ├─ Why:   需要支付网关真实回调，无法 mock                    │
+│        └─ How:   在 staging 环境使用测试支付账号完成一笔真实支付    │
+│                                                                     │
+│ 【DB 迁移】数据库 schema 变更                                       │
+│  [ ] 3. V20260728__add_cancel_reason.sql                            │
+│        ├─ Where:  db/migrations/V20260728__add_cancel_reason.sql    │
+│        ├─ Why:   migration 不在测试事务覆盖范围内                    │
+│        ├─ How:   在 staging DB 执行 flyway migrate + verify column  │
+│        └─ 回滚:  flyway undo 或手动 DROP COLUMN                     │
+│                                                                     │
+│ 【权限检查】需要真实角色/会话验证                                   │
+│  [ ] 4. OrderController.deleteOrder() 权限检查                       │
+│        ├─ Where:  src/main/java/OrderController.java:85             │
+│        ├─ Why:   越权测试需要多组真实 session token                  │
+│        ├─ How:   用 admin/user/guest 三个角色分别调用接口           │
+│        └─ 预期:   admin=200, user=403, guest=401                    │
+│                                                                     │
+│ 【跨平台】特定于 OS 的代码路径                                       │
+│  [ ] 5. safe_join() Windows 路径处理                                │
+│        ├─ Where:  src/helpers.py:42 (os.path.join 调用)             │
+│        ├─ Why:   仅 Windows 上产生反斜杠，Linux 测试通过            │
+│        ├─ How:   在 Windows 机器执行 test_safe_join()               │
+│        └─ 验证:   断言路径使用正斜杠 / 而非反斜杠 \\                │
+│                                                                     │
+│ 【并发竞态】单线程测试覆盖不到                                      │
+│  [ ] 6. UserStore.add_user() 并发写入                              │
+│        ├─ Where:  src/user_store.py:25 (_canonical_map 更新)        │
+│        ├─ Why:   需要多线程同时调用验证原子性                        │
+│        └─ How:   threading.Thread × 10 同时 add_user 同一 atn+carry │
+│                                                                     │
+│ 共 6 项待人工验证 | 按步骤操作，完成一项后打勾 ✓              │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 即便测试通过仍可能存在的风险 ──────────────────────────────────┐
+│ 单元测试覆盖不到的场景，即使全部通过仍需关注：                     │
+│                                                                     │
+│ 风险类型            │ 场景                      │ 触发条件      │
+│─────────────────────┼───────────────────────────┼────────────────│
+│ 集成断裂            │ 外部 API 接口变更          │ 依赖方升级    │
+│ 基础设施异常        │ 数据库连接池耗尽/超时      │ 高并发时      │
+│ 网络抖动            │ 分布式调用超时重试          │ 网络波动      │
+│ 数据竞争            │ 多线程并发写入相同 key     │ 临界区无锁    │
+│ 内存溢出            │ 批量数据未限制分页大小      │ 数据量>10万   │
+│ 配置错误            │ 环境变量/密钥未正确注入     │ 部署环境切换  │
+│ 日志泄密            │ PII 数据写入日志            │ 异常堆栈打印  │
+│ 降级失败            │ 依赖服务不可用时的熔断处理  │ 依赖方宕机    │
+│─────────────────────┼───────────────────────────┼────────────────│
+│ 经本次变更分析: 以上风险需根据实际部署环境逐一确认                 │
+│ 如无新增风险, 可忽略此项                                          │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 回滚命令 ──────────────────────────────────────────────────────┐
+│ /trellis-test rollback   # 回退本次全部测试变更                 │
+│ git log --oneline -5     # 查看本次变更的提交记录               │
+└─────────────────────────────────────────────────────────────────┘
+
+```
+
+### 5c. 报告输出流程（强制结构化表格）
+
+> ⚠️ **禁止用 bash echo 拼报告**：必须用 Python 生成结构化 markdown 表格，写入当前任务目录下的 `test_report.md`，同时输出到终端。确保报告包含：总体摘要、爆炸半径地图、测试结果（按层）、历史回归验证、Spec合规（含冲突分析）、新鲜度检查、覆盖缺口、需手动验证项。
+
+```bash
+# 1. 收集数据
+_SYMBOL=$(grep -vE '^(#|$)' .trellis/tests/.affected_symbols 2>/dev/null | head -1)
+_RESULTS_FILE=".trellis/tests/.last_test_results.json"
+_TASK_DIR=$(ls -dt .trellis/tasks/*/ 2>/dev/null | head -1)
+if [ -z "$_TASK_DIR" ]; then
+    _TASK_DIR=".trellis/tests/"
+fi
+_REPORT_FILE="${_TASK_DIR}test_report.md"
+PYTHONIOENCODING=utf-8 $_PY_CMD -c "
+import json, os, sys
+from datetime import datetime
+
+now = datetime.now().strftime('%Y-%m-%d %H:%M')
+symbol = '$_SYMBOL' or '?'
+risk = os.environ.get('_RISK_LEVEL', '?')
+change_commit = '$(git rev-parse --short HEAD 2>/dev/null)'
+
+# 读测试结果
+passed = failed = total = duration = '?'
+if os.path.isfile(r'$_RESULTS_FILE'):
+    try:
+        with open(r'$_RESULTS_FILE', encoding='utf-8') as f:
+            d = json.load(f)
+        passed = d.get('passed', '?')
+        failed = d.get('failed', '?')
+        total = d.get('total', '?')
+        duration = d.get('duration', '?')
+    except: pass
+
+# 读 spec 冲突报告
+spec_lines = []
+spec_conflict = '.trellis/tests/.spec_conflict_report'
+if os.path.isfile(spec_conflict):
+    with open(spec_conflict, encoding='utf-8') as f:
+        spec_lines = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+
+# 读 affected_symbols
+syms = []
+sym_file = '.trellis/tests/.affected_symbols'
+if os.path.isfile(sym_file):
+    with open(sym_file, encoding='utf-8') as f:
+        syms = [l.strip() for l in f if l.strip() and not l.startswith('#')]
+
+# 生成报告
+report = []
+report.append('# trellis-test 最终报告')
+report.append('')
+report.append('## 总体摘要')
+report.append(f'| 项目 | 值 |')
+report.append(f'|------|-----|')
+report.append(f'| 变更符号 | {symbol} |')
+report.append(f'| 风险等级 | {risk} |')
+report.append(f'| 变更版本 | {change_commit} |')
+report.append(f'| 执行时间 | {now} |')
+report.append(f'| 测试结果 | {passed}/{total} PASS ({failed} failed) |')
+report.append(f'| 耗时 | {duration}s |')
+report.append('')
+
+report.append('## 爆炸半径')
+report.append(f'| 层 | 符号 |')
+report.append(f'|-----|------|')
+for s in syms:
+    report.append(f'| DIRECT/UPSTREAM/DOWNSTREAM/PEER | {s} |')
+report.append('')
+
+report.append('## 测试结果')
+report.append('待补充（在 Step 4c 收集各层通过数后填入）')
+report.append('')
+
+report.append('## 历史回归测试验证')
+report.append('| 测试文件 | 结果 |')
+report.append('|----------|------|')
+# (从 SELECTED_TESTS 读取，对 shell 较复杂，留作待填充)
+report.append('(在运行后补充实际数据)')
+report.append('')
+
+report.append('## Spec/PRD 合规验证')
+if spec_lines:
+    report.append('| Spec 文件 | 规则 | 冲突分析 |')
+    report.append('|----------|------|---------|')
+    for l in spec_lines:
+        report.append(f'| {l} |')
+else:
+    report.append('(无关联 spec 规则)')
+report.append('')
+
+report.append('## 覆盖缺口')
+report.append('| 未覆盖符号 | 原因 | 处理 |')
+report.append('|-----------|------|------|')
+uncovered = '.trellis/tests/.uncovered_symbols'
+if os.path.isfile(uncovered):
+    with open(uncovered, encoding='utf-8') as f:
+        for l in f:
+            l = l.strip()
+            if l and not l.startswith('#'):
+                report.append(f'| {l} | 未生成测试 | 需补充 |')
+report.append('')
+
+report.append('## 需手动验证项')
+report.append('(在 Step 4b.8 收集后填入)')
+report.append('')
+
+# 写文件
+report_text = '\\n'.join(report)
+with open(r'$_REPORT_FILE', 'w', encoding='utf-8') as f:
+    f.write(report_text + '\\n')
+print(f'[REPORT] 报告已写入 $_REPORT_FILE')
+print()
+print(report_text)
+" 2>&1
+
+# 3. 如果 test_report.py 存在，也尝试调用
+if [ -n "$_SYMBOL" ] && [ -f ".trellis/scripts/test_report.py" ]; then
+    _RESULTS_ARG=""
+    [ -f "$_RESULTS_FILE" ] && _RESULTS_ARG="--results $_RESULTS_FILE"
+    PYTHONIOENCODING=utf-8 $_PY_CMD .trellis/scripts/test_report.py $_RESULTS_ARG "$_SYMBOL" 2>/dev/null || true
+fi
+
+echo ""
+echo "完整报告: "
+```
+
+---
+
+## 回退机制
+
+### 自动回退（测试修复循环中）
+
+修复循环中如果某轮修复失败 → `git stash pop` 恢复到该轮开始前的状态（保留用户原有的未提交工作）。
+
+### 手动回退
+
+用户执行 `/trellis-test rollback`：
+
+```bash
+_MANIFEST=".trellis/tests/MANIFEST.md"
+_BACKUP_DIR=$(ls -dt .trellis/tests/backup/*/ 2>/dev/null | head -1)
+
+if [ ! -f "$_MANIFEST" ]; then
+    echo "没有找到 MANIFEST.md，无可回退的内容"
+    exit 0
+fi
+
+# 读取 MANIFEST.md，只处理文件路径行（跳过注释和空行）
+# $f 是相对于 .trellis/tests/generated/ 的路径，如 java/OrderServiceTest.java
+grep -vE '^(#|$)' "$_MANIFEST" | while IFS= read -r f; do
+    # 从 generated 中删除
+    python -c "import os; os.remove(".trellis/tests/generated/$f" 2>/dev/null
+    # 从项目目录删除同步副本（根据语言/位置映射实际同步目标）
+    _BASENAME="$(basename "$f")"
+    case "$f" in
+        java/*)          python -c "import os; os.remove("src/test/java/$_BASENAME" 2>/dev/null ;;
+        python/*)        python -c "import os; os.remove("tests/$_BASENAME" 2>/dev/null ;;
+        go/*)            python -c "import os; os.remove("$_BASENAME" 2>/dev/null ;;
+        rust/*|c/*|cpp/*) python -c "import os; os.remove("tests/$_BASENAME" 2>/dev/null ;;
+        __tests__/*|jest/*) python -c "import os; os.remove("src/__tests__/$_BASENAME" 2>/dev/null ;;
+        *)               python -c "import os; os.remove("$f" 2>/dev/null ;;
+    esac
+done
+
+# 恢复备份的原始文件
+if [ -n "$_BACKUP_DIR" ] && [ -d "$_BACKUP_DIR" ]; then
+    cp -r "$_BACKUP_DIR"/* . 2>/dev/null
+    echo "已从 $_BACKUP_DIR 恢复原始文件"
+fi
+
+# 清理本轮 stash（如果有）
+STASH_REF=$(git stash list | grep "fix-before-round" | head -1 | cut -d: -f1)
+[ -n "$STASH_REF" ] && git stash drop "$STASH_REF" 2>/dev/null || true
+
+echo "回退完成"
+echo "注意: 自动修复的生产代码变更（如有）需要手动确认，见上方报告中'修复记录'"
+```
+
+### MANIFEST.md 格式
+
+```
+# 2026-07-25 14:00 - 变更: OrderService.java
+src/test/java/OrderServiceTest.java
+src/test/java/RefundControllerTest.java
+```
+
+由 Step 3c 通过 `.generation_start` 标记文件精确维护。
+
+---
+
+## 边界条件处理
+
+| 场景 | 处理 |
+|------|------|
+| **INDEX.md 为空**（首次运行） | 降级为全量跑项目已有测试 |
+| **INDEX.md 有记录但无命中** | 提示"爆炸半径内无关联测试，跳过运行" |
+| **.affected_symbols 为空** | 从 `.affected_files` 回退推断 |
+| **无未提交变更**（含 untracked） | 查 git diff + git status，真无变更才退出 |
+| **DB+git 历史均无关联测试** | 自动进入 Step 3 生成 DIRECT 测试填补缺口，而非跳过 |
+| **测试框架未安装** | 提示安装，给出配置命令 |
+| **用户中途取消** | 已生成的文件保留，结束流程 |
+| **子Agent全部失败** | 汇总失败原因，建议手动生成 |
+| **达到最大重试次数仍有失败** | 保留最后一轮修复，标记需人工介入 |
+| **修复后未全量重跑** | 违反强制规则，该轮无效，重新从全量重跑开始 |
+| **/goal 未达成时生成报告** | 报告无效，删除报告文件，退回 Step 4e |
+| **安全审计发现硬编码密钥** | **阻止继续**，要求先修复安全问题 |
+| **codegraph/gitnexus 不可用** | 降级为 git diff + 关键词扫描，报告标明"降级模式" |
+| **config.json 损坏** | json.load 返回空，fallback 到默认命令 |
+| **语言检测失败** | 提示用户手动配置 config.json |
+| **测试命令失败** | 展示失败输出，提示检查测试框架安装 |
+| **含空格的文件路径** | 所有 find/while/read 使用 `-print0` + `IFS=` 安全处理 |
+| **git stash 无可 stash 内容** | 前置 `git diff --quiet` 检查，无更改则不 stash |
+| **项目无测试目录**（首次） | Step 0e 自动 `mkdir -p` |
+| **有符号无法提取纯逻辑**（依赖服务端类库） | 生成契约测试（Contract Test），标记 `Layer: UNTESTABLE`，报告中提示手动验证 |
+| **全覆盖回填失败**（契约测试也无法生成） | 在报告中标记「需手动验证」，输出方法签名和调用链以便人工补充 |
+| **爆炸半径重叠历史测试**（跨次回归） | Step 4b 查 INDEX.md 自动匹配，将被选中执行回归验证 |
+| **测试静默过期**（生产代码变更但测试未同步） | 自动删除旧测试 + 进入 Step 3 重新生成（TestedCommit 更新到最新 hash） |
+
+## 设计决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 影响分析 | codegraph + gitnexus MCP（带 projectPath） | 符号级准确度远高于文件路径猜 |
+| MCP 降级 | 不可用时降级运行而非退出 | 不阻塞用户工作流 |
+| 安全审计 | 3层（静态+数据流+历史） | 静态漏报率高，数据流能发现隐式传递 |
+| 测试覆盖 | 四层（DIRECT + UPSTREAM + DOWNSTREAM + PEER） | 确保影响范围内所有功能点有防护 |
+| 层级过滤 | 全部四层（DIRECT + UPSTREAM + DOWNSTREAM + PEER）无论风险等级 | LOW 也可能漏报，全层覆盖最安全 |
+| 测试修复 | 最多3轮，只重跑失败测试 | 缩小反馈循环 |
+| 生产代码修复 | 需用户确认 | 防止 AI 误修业务逻辑 |
+| 验证循环 | 修复后重索引 INDEX.md + 重跑影响分析 | 确保修复后的代码与新 INDEX.md 一致 |
+| INDEX.md 排序 | 数据行排序，注释头保持原位 | 保留可读性 |
+| MANIFEST.md 更新 | 标记文件法（`.generation_start`）而非 `-newer` | 避免时序竞态 |
+| 回滚安全 | scoped 删除 + 备份恢复 + git stash pop | 不丢失用户未提交工作 |
+| 文件路径安全 | `while IFS= read -r` + `-print0` | 支持含空格路径 |
+| Unicode 分隔符 | `awk -F '→'` 替代 `cut -d'→'` | 正确处理多字节字符 |
+| Python 检测 | `python3`→`python`→`py -3` 链式回退 | Windows 兼容 |
+| pip 安装 | 检查已安装，未安装则提示而非静默安装 | 不污染用户环境 |

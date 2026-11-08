@@ -1,0 +1,5 @@
+Task: fix: restore array parsing for req.query repeated keys (#7147)
+Repo: expressjs/express #7181 (js)
+Files changed: 2 (16 additions, 1 deletions)
+
+Implement this change. Produce a detailed plan with: which files to change, what to change in each, diff summaries, edge cases, test considerations, and documentation updates.

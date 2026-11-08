@@ -1,0 +1,4 @@
+module/spring-boot-jetty/src/main/java/org/springframework/boot/jetty/JettyWebServer.java|核心修改|GracefulShutdown 协调类，替换 StatisticsHandler 为 GracefulHandler
+module/spring-boot-jetty/src/main/java/org/springframework/boot/jetty/reactive/JettyReactiveWebServerFactory.java|工厂修改|Reactive 工厂创建 GracefulHandler 替代 StatisticsHandler
+module/spring-boot-jetty/src/main/java/org/springframework/boot/jetty/servlet/JettyServletWebServerFactory.java|工厂修改|Servlet 工厂创建 GracefulHandler 替代 StatisticsHandler
+module/spring-boot-jetty/src/test/java/org/springframework/boot/jetty/autoconfigure/reactive/JettyReactiveWebServerAutoConfigurationTests.java|测试修改|强制转换类型从 StatisticsHandler 改为 GracefulHandler

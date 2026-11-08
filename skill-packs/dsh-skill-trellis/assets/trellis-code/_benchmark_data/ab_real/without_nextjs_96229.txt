@@ -1,0 +1,8 @@
+Change Plan: Count URL key length in filesystem route cache LRU
+
+File 1: packages/next/src/server/lib/lru-cache.ts - calculateSize signature change, pass key to set()
+File 2: packages/next/src/server/lib/router-utils/filesystem.ts - Add constants, flatKeyCopy(), rewrite size function, copy strings at insertion points
+File 3: packages/next/src/server/lib/lru-cache.test.ts - Add test for key in size calculation
+
+Memory impact: Before - unbounded growth for unique URLs. After - 8MB bounded, plateaus.
+Edge cases: V8 string slices retain parent URLs, JSON.parse round-trip for flat copy, no other LRU callers

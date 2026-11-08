@@ -1,0 +1,11 @@
+Phase 1 Analyze: with_message_override in context.rs. 5 files affected.
+Phase 2 Plan:
+  Q1: Approach A (defer to Drop + new methods) vs B (inline) vs C (closure). Choose A.
+  Q2: 5 files: diagnostic/mod.rs + context.rs + bind.rs + 2 test snapshots
+  Q3: Existing tests pass, 7 new snapshot lines verify title retention
+Phase 3 Execute:
+  mod.rs: prepend_info, set_headline_message, clear_concise_message
+  context.rs: move override to Drop, add message_override field
+  bind.rs: update doc
+Phase 4 Verify: No breaking changes, all callers compile, 7 new snapshot lines
+Phase 5 Report: 5 files, +58/-19, 3 new reusable Diagnostic methods

@@ -1,0 +1,9 @@
+# dsh-plugin-scope · 按工作区开关插件
+# 安装器会把 __FROZEN_NODE__ / __FROZEN_INSTALL__ 展开成本机绝对路径。
+- insert:
+    - id: dsh-plugin-scope
+      name: dsh-plugin-scope
+      config:
+        enabled: true
+        nodePath: "__FROZEN_NODE__"
+        panelScript: "__FROZEN_INSTALL__/tools/plugin-scope-ui.mjs"

@@ -1,0 +1,7 @@
+## Task: Fixed #37218 -- Doc'd that on-demand fetching is sync only.
+Repo: django/django
+Files changed (1): ["docs/topics/db/queries.txt"]
+Changes: +13/-2
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

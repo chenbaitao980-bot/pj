@@ -1,0 +1,9 @@
+Change Plan: DNS Memory Cache Eviction for OkHttp
+
+File 1: MemoryCache.kt (NEW, +125) - Abstract LRU cache with ConcurrentHashMap, 2x maxSize before eviction
+File 2: CachingTransport.kt (+37/-6) - Replace ConcurrentHashMap with MemoryCache, lastRequestedAt for LRU ordering
+File 3: MemoryCacheTest.kt (NEW, +240) - Tests for eviction, expiration, LRU ordering, re-entrant access
+File 4: StateMachineDnsCallTester.kt (+1) - Add maxEntryCount=4
+
+Edge cases: maxSize=0 bypasses cache, expired removed unconditionally, in-flight DNS calls preserved, null result evicted immediately
+Tests: manual time control, re-entrant computeIfAbsent, 2x threshold auto-eviction

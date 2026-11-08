@@ -1,0 +1,15 @@
+Add calls-in-place contract to MutableStateFlow update functions
+
+The update functions need @ContractsDsl callsInPlace contract.
+Changes to StateFlow.kt: add contract { callsInPlace(function, EXACTLY_ONCE) } to update, updateAndGet, getAndUpdate.
+Need @OptIn(ExperimentalContracts::class) annotation.
+Import kotlin.contracts.ExperimentalContracts, InvocationKind, contract.
+
+Edge cases:
+- EXACTLY_ONCE vs AT_LEAST_ONCE debate (while loop may retry)
+- tryUpdate also needs contract if it exists
+- Binary compatible, no runtime changes
+- Kotlin version requirement: 1.3+
+
+Test: existing tests pass, no new tests needed (contract is compile-time).
+Doc: KDoc comment could mention the contract.

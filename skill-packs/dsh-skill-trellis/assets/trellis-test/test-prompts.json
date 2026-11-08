@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "prompt": "给当前 Java 任务(.trellis/tasks/08-04-prevent-schedule-deadlock)跑完整测试",
+    "expected": "检测到 Java 项目；若 maven 缺失则自动安装(winget/choco/下载)后执行模块级 mvn test；生成中文测试报告"
+  },
+  {
+    "id": 2,
+    "prompt": "测试环境缺 maven/pytest，怎么处理？",
+    "expected": "自动安装/定位运行器(winget/choco/scoop/官方下载/javac+JUnitCore 直跑)，不得把「环境不可用」当作降级理由记录；附安装失败证据才允许降级"
+  }
+]

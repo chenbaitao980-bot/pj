@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "prompt": "我们的定时任务 CusFielddataRankFixCronJob 修正人员职级字段 field1/field2，从 HR 库 oa_resource_view 拉取管理通道级别/专业技术通道级别，但是 field1 空行还是很多，帮我梳理一下需求该怎么改",
+    "expected": "走完整 brainstorm 流程；方案收敛后触发 Step 7.5 预期结果门禁——只读查库算出各 scope 空行基线（如 field1 空 10289 → ~1337）并呈给用户逐项确认，而不是直接进实现"
+  },
+  {
+    "id": 2,
+    "prompt": "后台列表页加载越来越慢，要做性能优化，帮我梳理需求",
+    "expected": "方案收敛后触发预期结果门禁：profile-first 测当前基线（P99 / 耗时分布 / 调用计数），预期写成『P99 从 X → ≤Y』的数字，呈现给用户确认"
+  },
+  {
+    "id": 3,
+    "prompt": "我们要做一个新的对账功能，需求还不太清楚，帮我 brainstorm 一下",
+    "expected": "收敛 MVP scope + Out of Scope；给出可核验预期（对账类给『输入 X → 输出 Y』契约，若有可量化结果必须算出数字）并请用户确认后进实现"
+  }
+]

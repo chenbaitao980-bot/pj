@@ -1,0 +1,5 @@
+Task: Remove manual Protobuf source sets #2050
+Repo: android/nowinandroid #2051 (kotlin)
+Files changed: 1 (0 additions, 8 deletions)
+
+Implement this change. Produce a detailed plan with: which files to change, what to change in each, diff summaries, edge cases, test considerations, and documentation updates.

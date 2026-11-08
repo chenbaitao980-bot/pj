@@ -1,0 +1,8 @@
+Phase 1 Analyze: expand_restricted_patterns in crates/oxide/src/scanner/sources.rs. 3 files: sources.rs, scanner.rs tests, CHANGELOG.md.
+Phase 2 Plan:
+  Q1: A(gitignore * + ! rule injection) vs B(separate filter pass) vs C(restrict at walk time). Choose A.
+  Q2: 3 files: sources.rs + scanner.rs + CHANGELOG.md. No config/doc sync needed.
+  Q3: 63 integration tests + 16 unit tests verify correctness.
+Phase 3 Execute: expand_restricted_patterns injects * ignore + !pattern allow rules per source base. FxHashSet prevents duplicate * injection. Parent dir allow-rules for wildcard intermediates.
+Phase 4 Verify: unrestricted roots skipped, duplicate bases deduped, all 79 tests pass, 22s->20ms perf improvement.
+Phase 5 Report: 3 files, core algorithm + 8 tests + changelog. Perf: 22s to 20ms.

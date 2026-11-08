@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "prompt": "改这个 Java 项目的某个方法逻辑并验证编译",
+    "expected": "质量门禁先自愈环境：缺 maven 则安装/用 javac 直编，完成真实编译验证，不记录局限"
+  },
+  {
+    "id": 2,
+    "prompt": "质量门禁要求 mvn compile/test 但机器没装 maven，怎么办？",
+    "expected": "自动安装 maven(winget/choco/镜像下载)或用 javac+JUnitCore 等效直跑；仅安装失败且无等效才降级并附证据"
+  }
+]

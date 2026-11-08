@@ -1,0 +1,35 @@
+{
+  "name": "dsh-skill-trellis",
+  "version": "2.0.0",
+  "description": "Trellis 全家桶 + SessionStart 上下文注入插件：16 个 trellis-* 技能全局可用，并在会话开始时自动把 .trellis 的任务/规范/Phase Index 注入模型历史（补上 DSH 缺失的 SessionStart hook）",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "assets",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-plugins",
+    "agent-skills",
+    "skill-pack",
+    "trellis",
+    "deepseek-harness"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "smoke": "node scripts/smoke.mjs"
+  }
+}

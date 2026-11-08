@@ -1,0 +1,5 @@
+timestamp	commit	skill	old_score	new_score	status	dimension	note	eval_mode
+2026-07-29T10:00	baseline	trellis-code	-	86	baseline	-	初始评估	结构评分（维度1-7: 65/65，维度8: 9/12，维度9: 8/23）dry_run
+2026-07-29T10:05	ea8cd6d	trellis-code	86	87	keep	资源整合度	新增路径发现规则+Step 2缓存+ls fallback+_scripts修正	dry_run
+2026-07-29T10:10	eee39a6	trellis-code	87	89	keep	指令具体性	Phase 1 影响分析前增加占位符替换警告	dry_run
+2026-07-29T10:15	1c661ff	trellis-code	89	90	keep	整体架构	Phase 4 质量门禁改为引用共用 Step 6，消除重复	dry_run

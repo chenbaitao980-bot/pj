@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "trellis-code Round 3 — 消除重复代码",
+    "subtitle": "Before: Phase 4 单独 copy → After: 引用共用 Step 6",
+    "output": "round3-deduplication.html"
+  },
+  "components": [
+    { "id": "before-title", "type": "external", "label": "Before", "sublabel": "重复代码", "pos": [40, 40], "size": [180, 50] },
+
+    { "id": "shared6", "type": "database", "label": "共用 Step 6", "sublabel": "质量门禁 bash 命令", "pos": [40, 130], "size": [180, 60] },
+    { "id": "phase4", "type": "security", "label": "Phase 4 质量门禁", "sublabel": "相同 bash 命令副本", "pos": [40, 240], "size": [180, 60] },
+    { "id": "dup", "type": "security", "label": "7 行重复代码", "sublabel": "改一处可能漏另一处", "pos": [40, 350], "size": [180, 60] },
+
+    { "id": "after-title", "type": "backend", "label": "After", "sublabel": "引用模式", "pos": [380, 40], "size": [180, 50] },
+
+    { "id": "shared6a", "type": "database", "label": "共用 Step 6", "sublabel": "质量门禁 bash 命令（唯一）", "pos": [380, 130], "size": [180, 60] },
+    { "id": "phase4a", "type": "backend", "label": "Phase 4 质量门禁", "sublabel": "见共用 Step 6（引用）", "pos": [380, 240], "size": [180, 60] },
+    { "id": "clean", "type": "backend", "label": "0 重复", "sublabel": "一处修改处处生效", "pos": [380, 350], "size": [180, 60] },
+
+    { "id": "new5", "type": "messagebus", "label": "new Step 5 已用引用模式", "pos": [380, 450], "size": [180, 40] }
+  ],
+  "connections": [
+    { "from": "shared6", "to": "phase4", "variant": "dashed", "fromSide": "right", "toSide": "left", "label": "副本" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Phase 4 优化前后", "wraps": ["phase4", "dup", "phase4a", "clean"] }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Round 3 改动",
+      "items": [
+        "删除 Phase 4 中 7 行重复的 bash 命令",
+        "改为引用「共用 Step 6：质量门禁」",
+        "与 new 模式 Step 5 的引用方式一致",
+        "commit: 1c661ff"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "name": "dsh-artex",
+  "version": "0.2.0",
+  "description": "把 ARTEX（LLM 多智能体自主渗透测试系统，Go + Next.js）接进 DeepSeek Harness：拉取、构建、建库、启停、日志、自检，全部收成 DSH 工具。",
+  "author": "pojia",
+  "type": "module",
+  "license": "AGPL-3.0",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./artex": "./lib/artex.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "bin",
+    "test",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "artex",
+    "pentest",
+    "llm-agent"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "install": {
+      "preferred": "link"
+    }
+  },
+  "scripts": {
+    "smoke": "node test/smoke.mjs",
+    "doctor": "node bin/artex-dsh.mjs doctor"
+  },
+  "bin": {
+    "artex-dsh": "bin/artex-dsh.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chenbaitao980-bot/pojia.git",
+    "directory": "dsh-artex"
+  },
+  "homepage": "https://github.com/chenbaitao980-bot/pojia/tree/main/dsh-artex",
+  "dshTargets": [
+    "0.2.1-rc.2",
+    "0.2.1-rc.5"
+  ]
+}

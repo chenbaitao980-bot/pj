@@ -1,0 +1,29 @@
+{
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "peerDependencies":  {
+                             "@deepseek-ai/cordis":  "^4.0.1"
+                         },
+    "description":  "grill-me 技能包：审问式方案压力测试，逐个分支把设计决策钉死（移植自 RobMitt/grill-me-skill，MIT）",
+    "type":  "module",
+    "version":  "1.0.0",
+    "files":  [
+                  "lib",
+                  "assets",
+                  "cordis.patch.yml",
+                  "README.md"
+              ],
+    "name":  "dsh-skill-grill-me",
+    "main":  "lib/index.js",
+    "license":  "MIT",
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "dsh-plugins",
+                     "agent-skills",
+                     "skill-pack"
+                 ]
+}

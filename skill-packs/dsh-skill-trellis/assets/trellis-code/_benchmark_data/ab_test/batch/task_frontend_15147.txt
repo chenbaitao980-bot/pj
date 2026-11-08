@@ -1,0 +1,7 @@
+## Task: fix(runtime-vapor): preserve pending async component position
+Repo: vuejs/core
+Files changed (3): ["packages/runtime-vapor/__tests__/hydration.spec.ts", "packages/runtime-vapor/__tests__/vdomInterop.spec.ts", "packages/runtime-vapor/src/component.ts"]
+Changes: +423/-9
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

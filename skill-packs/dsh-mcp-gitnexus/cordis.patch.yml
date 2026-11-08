@@ -1,0 +1,26 @@
+# dsh-mcp-gitnexus · 冻结版内置 MCP + 自动初始化
+# 安装器会把 __FROZEN_NODE__ / __FROZEN_VENDOR__ 换成本机绝对路径；
+# 手工改配置时保留这两个占位符以外的内容即可。
+- insert:
+    # 插件本体：会话第一步注入用法约束，并在缺 .gitnexus/ 时后台建索引
+    - id: dsh-mcp-gitnexus
+      name: dsh-mcp-gitnexus
+      config:
+        enabled: true
+        autoInit: true
+        vendorDir: "__FROZEN_VENDOR__"
+        nodePath: "__FROZEN_NODE__"
+    # MCP 服务：mcp__gitnexus__*
+    - id: mcp-gitnexus
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        transport: stdio
+        serverName: gitnexus
+        command: "__FROZEN_NODE__"
+        args:
+          - "__FROZEN_VENDOR__/gitnexus/dist/cli/index.js"
+          - mcp
+        env: {}
+        cwd: ""
+        failOnStartupError: false
+        toolCallTimeoutMs: 120000

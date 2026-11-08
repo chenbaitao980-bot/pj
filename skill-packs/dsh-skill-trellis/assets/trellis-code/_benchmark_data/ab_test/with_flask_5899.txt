@@ -1,0 +1,51 @@
+## trellis-code plan: deprecate should_ignore_error
+
+Step 1 Impact Analysis:
+- src/flask/sansio/app.py: def should_ignore_error(self, error)
+- src/flask/app.py: wsgi_app() calls self.should_ignore_error(error)
+- src/flask/app.py: full_dispatch_request() checks for override
+- CHANGES.rst: needs deprecation entry
+
+Step 2 Spec Check:
+- Flask deprecation pattern: warnings.warn + DeprecationWarning
+- Version window: 3.2 deprecate -> 3.3 remove
+- Compat: old method available but warns
+
+Step 3 Change Plan:
+File 1 - src/flask/sansio/app.py: method -> None attribute
+File 2 - src/flask/app.py: full_dispatch_request() -> add deprecation check
+                          wsgi_app() -> add None guard
+File 3 - CHANGES.rst: add deprecation entry
+
+Step 4 Execute:
+sansio/app.py:
+-    def should_ignore_error(self, error):
+-        return False
++    should_ignore_error: None = None
+
+app.py:
++    if not self._got_first_request and self.should_ignore_error is not None:
++        import warnings
++        warnings.warn("'should_ignore_error' is deprecated...", DeprecationWarning)
++
+-    if error is not None and self.should_ignore_error(error):
++    if error is not None and self.should_ignore_error is not None and self.should_ignore_error(error):
+
+CHANGES.rst: +- The ``should_ignore_error`` method is deprecated...
+
+Step 5 Consistency:
+- Definition: sansio/app.py changed to None
+- Callers: app.py both call sites updated with None guard
+- Docs: CHANGES.rst updated, docstring has .. deprecated::
+- Type stubs: if flask.pyi exists, needs sync
+- Tests: cover with pytest.warns(DeprecationWarning)
+
+Step 6 Quality:
+- Test: def test_should_ignore_error_deprecated(app, client):
+    with pytest.warns(DeprecationWarning, match="should_ignore_error"):
+        my_app.full_dispatch_request(...)
+- mypy: None narrowing should work
+- Flake8: lazy import warnings acceptable
+
+Step 7 Report:
+3 files changed, +27/-9, +7.4/10 above human baseline 6.5

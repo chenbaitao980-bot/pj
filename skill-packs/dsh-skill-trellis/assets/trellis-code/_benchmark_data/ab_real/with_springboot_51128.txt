@@ -1,0 +1,8 @@
+Phase 1 Analyze: 4 files in spring-boot-jetty module. StatisticsHandler->GracefulHandler replacement.
+Phase 2 Plan:
+  Q1: A(direct replace) vs B(wrapper) vs C(dual handler). Choose A - minimal diff.
+  Q2: 4 Java files. No config/doc/env changes needed. GracefulShutdown.java unchanged (Supplier<Integer>).
+  Q3: test cast already updated, gradlew test.
+Phase 3: Import swaps, rename findStatisticsHandler->findGracefulHandler, Math.min clamp on sum.
+Phase 4: 4 imports+4 type refs+2 method refs all synced, thread safe, no scope creep.
+Phase 5: 4 files +23/-20, Jetty 12 native GracefulHandler.

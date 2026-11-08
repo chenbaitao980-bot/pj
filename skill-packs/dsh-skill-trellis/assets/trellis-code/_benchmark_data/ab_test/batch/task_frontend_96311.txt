@@ -1,0 +1,7 @@
+## Task: Revert "[turbopack] Track re-exports in `import_usage` inside of `compute_import_usage`"
+Repo: vercel/next.js
+Files changed (42): ["turbopack/crates/turbopack-ecmascript/src/analyzer/imports.rs", "turbopack/crates/turbopack-tests/tests/snapshot/reexport-drop/basic/input/index.js", "turbopack/crates/turbopack-tests/tests/snapshot/reexport-drop/basic/input/lib.js", "turbopack/crates/turbopack-tests/tests/snapshot/reexport-drop/basic/input/unused.js", "turbopack/crates/turbopack-tests/tests/snapshot/reexport-drop/basic/options.json"]
+Changes: +8/-290
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

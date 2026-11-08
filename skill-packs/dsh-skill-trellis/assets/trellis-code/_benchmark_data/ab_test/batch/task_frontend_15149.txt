@@ -1,0 +1,7 @@
+## Task: fix(runtime-vapor): preserve functional component root bindings
+Repo: vuejs/core
+Files changed (5): ["packages/runtime-core/src/componentRenderUtils.ts", "packages/runtime-core/src/index.ts", "packages/runtime-vapor/__tests__/componentAttrs.spec.ts", "packages/runtime-vapor/src/component.ts", "packages/runtime-vapor/src/dom/prop.ts"]
+Changes: +45/-7
+
+Implement the changes described. Follow trellis-code: Analyze -> Plan(Q1/Q2/Q3) -> Execute -> Verify -> Report.
+Focus on the方案评估 (Q1: alternatives, Q2: chain impact, Q3: verification).

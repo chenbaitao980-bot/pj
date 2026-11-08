@@ -1,0 +1,29 @@
+{
+  "name": "dsh-mcp-codegraph",
+  "version": "1.0.0",
+  "description": "CodeGraph 代码知识图谱 MCP 服务（随冻结版内置、默认启用）：注册 codegraph_explore，并在会话开始时注入「一个调用代替 grep+Read 循环」的使用约束。",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "codegraph",
+    "code-intelligence",
+    "deepseek-harness"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

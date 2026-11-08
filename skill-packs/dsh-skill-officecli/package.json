@@ -1,0 +1,29 @@
+{
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           }
+            },
+    "peerDependencies":  {
+                             "@deepseek-ai/cordis":  "^4.0.1"
+                         },
+    "description":  "officecli 技能包：用 officecli CLI 创建/分析/校对/修改 .docx/.xlsx/.pptx，无需安装 Office",
+    "type":  "module",
+    "version":  "1.0.0",
+    "files":  [
+                  "lib",
+                  "assets",
+                  "cordis.patch.yml",
+                  "README.md"
+              ],
+    "name":  "dsh-skill-officecli",
+    "main":  "lib/index.js",
+    "license":  "MIT",
+    "keywords":  [
+                     "dsh",
+                     "dsh-plugin",
+                     "dsh-plugins",
+                     "agent-skills",
+                     "skill-pack"
+                 ]
+}
