@@ -171,3 +171,15 @@ this.phase = ev.command === void 0 ? "plain" : "claimed";
 ## 5. 规范：本地优先于官方（已写入 AGENTS.md）
 
 官方上游功能与本地冻结版功能冲突时，**保留本地功能**；官方只作增量吸收，不得覆盖或回退本地定制。配套规则：只改 payload、补丁脚本化且可重入、改前快照、改后升版、旧版本一律保留、手机端同步。
+
+## 6. 副会话（Ctrl+;）——已打进 payload
+
+实现：`frozen-build-src/patch-side-session.js`，在 `dsh-client-ui-workspace` 的快捷键注册处插入一条 `session.side`。
+
+- 绑定：桌面 `Ctrl+;`（`code: "Semicolon"`, `modifiers: ["primary"]`），Web 端退化为 `Ctrl+Alt+;`，与官方 `session.fork` 的 Web 降级规则一致。
+- 行为：调用官方 `navigation.forkSession(originId)`——fork 出的是**真会话**，有自己的 agent loop，主会话在后台继续跑。
+- 多副会话：`sideOrigin` 记住你第一次按时的会话，之后每按一次都从**同一个主会话**再开一个副会话，不会出现"fork 的 fork"链。
+- 守卫：无会话 → blocked(`shortcut.noSession`)；空白会话且没有已知主会话 → blocked(`shortcut.noCompletedTurn`)；fork 失败沿用官方 `reportForkFailure` 分类提示。
+- 校验：`node --check` 通过，278631 → 279749 字节。
+
+未做（下一轮）：副会话的并行可见面板（右侧 `sidebarRightTabs` 已确认可按 kind 注册 tab body，`ctx.sidebarRight.openTab(kind)` 可编程打开），以及把副会话回答回灌主会话。
