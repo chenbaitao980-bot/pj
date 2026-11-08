@@ -290,3 +290,24 @@ chip enabled: true   composer focusable: true
 ```
 
 这条把「无工作区新建会话」从"补丁写对了"升级为"装机版真机可用"。
+
+## 10. 重要纠错：插件"没加载"是我跑错了 profile
+
+上一轮在隔离装机里发现 `style[data-plugin-css="@local/dsh-toolcall-tone/highlight.css"]` 不存在、`__DSH_BOOT__` 里也没有 `@local`，一度怀疑插件 manifest 有问题。
+
+真实原因：`dsh web` 启动的是 **profile `web`**，而安装器把插件注册在 **profile `desktop`** 里。装机 HomeDir 下 `profiles/web` 只是模板（只有 `@deepseek-ai/dsh-base` + `dsh-web-app`），插件当然不在。**桌面壳本身启动的是 `desktop`，实际不受影响。**
+
+把 `profiles/desktop` 复制成 `profiles/web` 后重测：
+
+```
+bootHasLocal: true
+localHits: ["@local/dsh-toolcall-tone", "@local/dsh-toolcall-tone/client.js&rev=9eea4885cd12", …]
+stylePresent: true
+styleHasMcp:  true          # 样式表里确实有 [data-tool^="mcp__"]
+```
+
+GitNexus MCP 也随之启动，说明整条插件链是活的。
+
+**方法论教训**：用 `dsh web` 验证冻结版功能时，必须先把 `profiles/desktop` 镜像到 `profiles/web`，否则测的是模板 profile。
+
+同时把插件 manifest 的 `dsh.client` 对齐到已验证可用的 `dsh-plugin-scope` 形状（`inject` 非空、去掉 `immediately`），随 0.2.5-rc.1 重新出货。
