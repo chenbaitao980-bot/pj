@@ -169,6 +169,22 @@ if ($profileDir) {
     Check 'side-chat: shared-memory host bridge' ((HasMarker $sideChatIndex 'side-chat-memory') -and (HasMarker $sideChatIndex 'agent/pre-step')) $sideChatIndex
     Check 'side-chat: parent session title marker' ((HasMarker $sideChatClient 'SIDE_TITLE_MARK') -and (HasMarker $sideChatClient 'markSideSession')) $sideChatClient
 
+    # dsh-purge 的 revert 会先还原 bundle 再按 FROZEN_PATCH_SCRIPTS 重打。
+    # 若是旧列表，revert 会把副会话重新隐藏；tree/notes 必须在列表里且 hide 不在。
+    $purgeCore = Join-Path $profileDir 'node_modules\dsh-purge\lib\core.js'
+    Check 'purge: reapplies side-chat tree' (HasMarker $purgeCore 'patch-side-chat-tree.js') $purgeCore
+    Check 'purge: reapplies workspace notes' (HasMarker $purgeCore 'patch-workspace-notes.js') $purgeCore
+    Check 'purge: no obsolete side-chat hide' (-not (HasMarker $purgeCore 'patch-side-chat-hide.js')) $purgeCore
+    Check 'tool: obsolete side-chat hide removed' (-not (Test-Path (Join-Path $toolsDir 'patch-side-chat-hide.js'))) $toolsDir
+
+    # Tracker and panel receive the raw `⧉ <id> · name` title. They must strip
+    # the marker; otherwise side chats show a UUID twice, in the tracker and in
+    # desktop notifications.
+    $trackerClient = Join-Path $profileDir 'node_modules\@local\dsh-session-tracker\client.js'
+    Check 'side-chat: tracker strips title marker' ((HasMarker $trackerClient 'SIDE_TITLE_RE') -and (HasMarker $trackerClient 'sideTitleText')) $trackerClient
+    $panelClient = Join-Path $profileDir 'node_modules\@local\dsh-session-panel\client.js'
+    Check 'side-chat: panel strips title marker' ((HasMarker $panelClient 'SIDE_TITLE_RE') -and (HasMarker $panelClient 'sideTitleText')) $panelClient
+
     # Task guardian (0.2.11-rc.10+): the host half registers the `taskGuardian`
     # projection and tags its writes; the board reads that projection. A package
     # carrying the old placeholder-only fallback would bring back the

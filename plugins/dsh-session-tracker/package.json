@@ -1,0 +1,29 @@
+{
+  "name": "@local/dsh-session-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "左侧栏顶部的会话追踪面板：运行中 / 待回答（提问、审批、计划待审）/ 已完成未确认，一目了然，可折叠。桌面端在窗口隐藏或未聚焦时用系统通知提醒待回答的会话，点击通知直接回到该会话。",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

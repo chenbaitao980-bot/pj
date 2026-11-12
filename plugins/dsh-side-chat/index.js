@@ -55,8 +55,12 @@ function parentIdOf(ctx, session) {
   return parentId;
 }
 
-/** Highest parent seq already represented in this side Session's own log. */
-function lastSyncedSeq(session) {
+/**
+ * Highest seq of `parentId` already represented in this side Session's log.
+ * A side chat forked from another side chat inherits memory messages that
+ * point at the original main Session; those must not move this chat's cursor.
+ */
+function lastSyncedSeq(session, parentId) {
   const start = typeof session.inheritedEventCount === 'number' ? session.inheritedEventCount : 0;
   let best = SYNC_CURSOR.get(session);
   if (best === undefined) best = start;
@@ -74,6 +78,7 @@ function lastSyncedSeq(session) {
     if (data === undefined || data === null) continue;
     const source = data.source;
     if (source === undefined || source === null || source.kind !== MEMORY_SOURCE) continue;
+    if (source.parentId !== parentId) continue;
     const to = source.parentTo;
     if (typeof to === 'number' && Number.isSafeInteger(to) && to >= 0 && to > best) best = to;
   }
@@ -295,7 +300,7 @@ export function apply(ctx) {
         return decision;
       }
       if (parent === undefined || parent === null || parent === session) return decision;
-      const from = lastSyncedSeq(session);
+      const from = lastSyncedSeq(session, parentId);
       const to = parent.seq;
       if (typeof to !== 'number' || !(from < to)) return decision;
       let events;

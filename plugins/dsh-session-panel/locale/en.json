@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session overview",
+    "description": "A right-sidebar session overview (Ctrl+' to toggle): context usage, MCP connector health, available plugins and skills, files this session produced, and how far each Git / SVN working copy is from its remote, switchable across repositories."
+  }
+}

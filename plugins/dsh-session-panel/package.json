@@ -1,0 +1,28 @@
+{
+  "name": "@local/dsh-session-panel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "会话概览面板（右侧栏，Ctrl+' 呼出/隐藏）：上下文用量、MCP 连接器健康状态、可用插件与技能、本会话输出的文件，以及按项目管理工具（Git / SVN）展示本地与远端差多少，多个仓库可切换。",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "vcs.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

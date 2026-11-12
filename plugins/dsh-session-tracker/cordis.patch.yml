@@ -1,0 +1,3 @@
+- insert:
+    - id: session-tracker
+      name: '@local/dsh-session-tracker'
