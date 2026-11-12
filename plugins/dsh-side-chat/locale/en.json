@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Side chat",
+    "description": "Ctrl+; opens a side chat beside the current conversation: it forks the history when a turn has finished, otherwise starts a fresh Session in the same workspace. Closing a tab keeps its conversation; the next press reopens it, and repeated presses open as many side chats as you like."
+  }
+}
