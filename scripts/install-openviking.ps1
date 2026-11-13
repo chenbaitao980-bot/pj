@@ -1,8 +1,7 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
-  [switch]$SkipPackages,
-  [switch]$SkipModel
+  [switch]$SkipPackages
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,7 +11,6 @@ $runtime = Join-Path $repo 'runtime\openviking'
 $venv = Join-Path $runtime 'venv'
 $python = Join-Path $venv 'Scripts\python.exe'
 $server = Join-Path $venv 'Scripts\openviking-server.exe'
-$models = Join-Path $runtime 'models'
 $dshHome = Join-Path $env:USERPROFILE '.dsh'
 $profileDir = Join-Path $dshHome 'profiles\desktop'
 $pluginsDir = Join-Path $dshHome 'plugins'
@@ -33,7 +31,7 @@ function Copy-Plugin($Name) {
   Write-Host "plugin synced: $dst"
 }
 
-New-Item -ItemType Directory -Force -Path $runtime, $models, (Join-Path $runtime 'data'), (Join-Path $runtime 'logs') | Out-Null
+New-Item -ItemType Directory -Force -Path $runtime, (Join-Path $runtime 'data'), (Join-Path $runtime 'logs') | Out-Null
 
 if (-not $SkipPackages) {
   $uv = Get-Command uv -ErrorAction SilentlyContinue
@@ -47,15 +45,6 @@ if (-not $SkipPackages) {
 }
 
 if (-not (Test-Path $server)) { throw "openviking-server not found: $server" }
-
-if (-not $SkipModel) {
-  $model = Join-Path $models 'Qwen2.5-3B-Instruct-Q4_K_M.gguf'
-  if (-not (Test-Path $model)) {
-    $env:HF_ENDPOINT = 'https://hf-mirror.com'
-    & $python -c "from huggingface_hub import hf_hub_download; print(hf_hub_download(repo_id='bartowski/Qwen2.5-3B-Instruct-GGUF', filename='Qwen2.5-3B-Instruct-Q4_K_M.gguf', local_dir=r'$models'))"
-    if ($LASTEXITCODE -ne 0) { throw 'model download failed' }
-  }
-}
 
 $ovConf = Join-Path $runtime 'ov.conf'
 if (-not (Test-Path $ovConf)) {

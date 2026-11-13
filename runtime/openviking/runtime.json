@@ -17,39 +17,6 @@
     "bridge":  {
                    "enabled":  true,
                    "host":  "127.0.0.1",
-                   "port":  8082,
-                   "fallback":  {
-                                    "baseUrl":  "http://127.0.0.1:8081/v1",
-                                    "model":  "qwen2.5-3b-instruct",
-                                    "apiKey":  "local",
-                                    "timeoutMs":  600000
-                                }
-               },
-    "vlm":  {
-                "enabled":  true,
-                "host":  "127.0.0.1",
-                "port":  8081,
-                "cwd":  ".",
-                "command":  "venv/Scripts/python.exe",
-                "args":  [
-                             "-u",
-                             "-m",
-                             "llama_cpp.server",
-                             "--model",
-                             "models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-                             "--model_alias",
-                             "qwen2.5-3b-instruct",
-                             "--host",
-                             "127.0.0.1",
-                             "--port",
-                             "8081",
-                             "--n_ctx",
-                             "10240",
-                             "--n_threads",
-                             "8"
-                         ],
-                "healthPath":  "/v1/models",
-                "startupTimeoutMs":  180000,
-                "logFile":  "logs/vlm.log"
-            }
+                   "port":  8082
+               }
 }

@@ -11,7 +11,6 @@ export const inject = ['llm', 'agentDefaultModel'];
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SERVER_PORT = 1933;
-const DEFAULT_VLM_PORT = 8081;
 const DEFAULT_BRIDGE_PORT = 8082;
 const HEALTH_PATHS = ['/health', '/healthz', '/api/health', '/v1/health'];
 
@@ -100,32 +99,6 @@ function readRuntime(root) {
     logFile: path.join(root, 'logs', 'server.log'),
   });
 
-  const vlmRaw = runtime.vlm ?? config.vlm ?? null;
-  const vlmBool = runtime.vlmEnabled ?? config.vlmEnabled;
-  const vlmEnabled = vlmRaw?.enabled ?? vlmBool ?? false;
-  const vlmUser = vlmRaw?.user ?? {};
-  const vlmSpec = { ...vlmRaw, ...vlmUser };
-  const vlm = vlmEnabled
-    ? serviceSpec(root, vlmSpec, {
-        host: '127.0.0.1',
-        port: DEFAULT_VLM_PORT,
-        cwd: '.',
-        command: path.join('venv', 'Scripts', 'python.exe'),
-        args: [
-          '-u', '-m', 'llama_cpp.server',
-          '--model', path.join(root, 'models', 'Qwen2.5-3B-Instruct-Q4_K_M.gguf'),
-          '--model_alias', 'qwen2.5-3b-instruct',
-          '--host', String(vlmUser.host ?? '127.0.0.1'),
-          '--port', String(Number(vlmUser.port ?? DEFAULT_VLM_PORT)),
-          '--n_ctx', '10240',
-          '--n_threads', '8',
-        ],
-        healthPath: '/v1/models',
-        startupTimeoutMs: 180000,
-        logFile: path.join(root, 'logs', 'vlm.log'),
-      })
-    : null;
-
   const bridgeRaw = runtime.bridge ?? config.bridge ?? null;
   const bridgeEnabled = bridgeRaw?.enabled ?? bridgeRaw !== null;
   const bridgeHost = bridgeRaw?.host ?? '127.0.0.1';
@@ -136,14 +109,12 @@ function readRuntime(root) {
         host: bridgeHost,
         port: bridgePort,
         baseUrl: `http://${bridgeHost}:${bridgePort}`,
-        fallback: bridgeRaw?.fallback ?? null,
       }
     : null;
 
   return {
     root,
     server,
-    vlm,
     bridge,
     host: server.host,
     port: server.port,
@@ -241,100 +212,102 @@ function bridgeMessage(role, content, selection) {
   };
 }
 
-async function openAiCompletion(fallback, body) {
-  const response = await fetch(`${fallback.baseUrl.replace(/\/+$/u, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(fallback.apiKey ? { authorization: `Bearer ${fallback.apiKey}` } : {}),
-    },
-    body: JSON.stringify({
-      ...body,
-      model: fallback.model,
-      stream: false,
-    }),
-    signal: AbortSignal.timeout(Number(fallback.timeoutMs ?? 600000)),
-  });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`fallback ${response.status}: ${detail.slice(0, 500)}`);
-  }
-  const payload = await response.json();
-  const text = payload?.choices?.[0]?.message?.content;
-  if (typeof text !== 'string' || !text.trim()) throw new Error('fallback returned empty content');
-  return text;
-}
-
-async function bridgeCompletion(ctx, selection, body, bridge) {
+async function bridgeCompletion(ctx, selection, body) {
   const messages = (Array.isArray(body.messages) ? body.messages : []).map((message) =>
     bridgeMessage(message?.role === 'assistant' ? 'assistant' : message?.role === 'system' ? 'system' : 'user', message?.content, selection),
   );
   let text = '';
   let failure = null;
-  try {
-    const stream = ctx.llm.stream({
-      provider: selection.provider,
-      model: selection.model,
-      messages,
-      sessionId: 'openviking-memory-bridge',
-      ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
-      maxTokens: Number(body.max_tokens ?? body.max_completion_tokens ?? 4096),
-      temperature: Number(body.temperature ?? 0.1),
-    });
-    for await (const chunk of stream) {
-      if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') {
-        text += chunk.text;
-      } else if (chunk?.type === 'finish' && chunk.reason?.kind === 'error') {
-        failure = chunk.reason.failure;
-      } else if (chunk?.type === 'finish' && chunk.reason?.kind === 'aborted') {
-        failure = chunk.reason.failure ?? new Error('aborted');
-      }
+  const stream = ctx.llm.stream({
+    provider: selection.provider,
+    model: selection.model,
+    messages,
+    sessionId: 'openviking-memory-bridge',
+    ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
+    maxTokens: Number(body.max_tokens ?? body.max_completion_tokens ?? 4096),
+    temperature: Number(body.temperature ?? 0.1),
+  });
+  for await (const chunk of stream) {
+    if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') {
+      text += chunk.text;
+    } else if (chunk?.type === 'finish' && chunk.reason?.kind === 'error') {
+      failure = chunk.reason.failure;
+    } else if (chunk?.type === 'finish' && chunk.reason?.kind === 'aborted') {
+      failure = chunk.reason.failure ?? new Error('aborted');
     }
-    if (failure) throw new Error(failure.message ?? String(failure));
-    if (!text.trim()) throw new Error('empty model response');
-    return text;
-  } catch (error) {
-    if (!bridge?.fallback?.baseUrl || !bridge.fallback.model) throw error;
-    log(null, `bridge dsh model failed (${error instanceof Error ? error.message : String(error)}); using fallback ${bridge.fallback.model}`);
-    return openAiCompletion(bridge.fallback, body);
+  }
+  if (failure) throw new Error(failure.message ?? String(failure));
+  if (!text.trim()) throw new Error('empty model response');
+  return text;
+}
+
+function currentSelectionOrNull(ctx) {
+  try {
+    return ctx?.agentDefaultModel?.currentSelection() ?? null;
+  } catch {
+    return null;
   }
 }
 
 function startBridge(ctx, root, bridge) {
-  const existing = globalThis.__DSH_OPENVIKING_BRIDGE__;
-  if (existing?.server?.listening) return existing;
   if (!bridge?.enabled) return null;
+  const existing = globalThis.__DSH_OPENVIKING_BRIDGE__;
+  if (existing?.server) {
+    // A fresh apply rebinds the live server to the new context; leaving it on
+    // a disposed context made agentDefaultModel throw "inactive context",
+    // which took the whole host down.
+    existing.ctx = ctx;
+    existing.active = true;
+    if (!existing.server.listening) {
+      existing.server.listen(bridge.port, bridge.host, () => {
+        log(root, `bridge ready at http://${bridge.host}:${bridge.port}/v1`);
+      });
+    }
+    return existing;
+  }
   if (!ctx?.llm || typeof ctx.llm.stream !== 'function') {
     log(root, 'bridge: llm service unavailable');
     return null;
   }
 
+  const state = { ctx, active: true, server: null, baseUrl: `http://${bridge.host}:${bridge.port}` };
   const server = http.createServer(async (request, response) => {
-    const url = new URL(request.url ?? '/', `http://${bridge.host}:${bridge.port}`);
-    if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) {
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ status: 'ok', healthy: true }));
-      return;
-    }
-    if (request.method === 'GET' && url.pathname === '/v1/models') {
-      const selection = ctx.agentDefaultModel.currentSelection();
-      response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({
-        object: 'list',
-        data: [{ id: selection.model, object: 'model', owned_by: selection.provider }],
-      }));
-      return;
-    }
-    if (request.method !== 'POST' || url.pathname !== '/v1/chat/completions') {
-      response.writeHead(404, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: { message: 'not found', type: 'invalid_request_error' } }));
-      return;
-    }
-
     try {
+      if (!state.active) {
+        response.writeHead(503, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'bridge disposed', type: 'bridge_unavailable' } }));
+        return;
+      }
+      const url = new URL(request.url ?? '/', state.baseUrl);
+      if (request.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ status: 'ok', healthy: true }));
+        return;
+      }
+      const isModels = request.method === 'GET' && url.pathname === '/v1/models';
+      const isChat = request.method === 'POST' && url.pathname === '/v1/chat/completions';
+      if (!isModels && !isChat) {
+        response.writeHead(404, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'not found', type: 'invalid_request_error' } }));
+        return;
+      }
+      const selection = currentSelectionOrNull(state.ctx);
+      if (!selection?.model) {
+        response.writeHead(503, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'model selection unavailable (context inactive)', type: 'bridge_unavailable' } }));
+        return;
+      }
+      if (isModels) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          object: 'list',
+          data: [{ id: selection.model, object: 'model', owned_by: selection.provider }],
+        }));
+        return;
+      }
+
       const body = JSON.parse(await readRequestBody(request));
-      const selection = ctx.agentDefaultModel.currentSelection();
-      const text = await bridgeCompletion(ctx, selection, body, bridge);
+      const text = await bridgeCompletion(state.ctx, selection, body);
       const payload = {
         id: `chatcmpl-${randomUUID()}`,
         object: 'chat.completion',
@@ -360,18 +333,35 @@ function startBridge(ctx, root, bridge) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log(root, `bridge request failed: ${message}`);
-      response.writeHead(502, { 'content-type': 'application/json' });
+      if (!response.headersSent) {
+        response.writeHead(502, { 'content-type': 'application/json' });
+      }
       response.end(JSON.stringify({ error: { message, type: 'bridge_error' } }));
     }
   });
 
   server.on('error', (error) => log(root, `bridge server error: ${error.message}`));
+  server.on('clientError', (error, socket) => {
+    log(root, `bridge client error: ${error.message}`);
+    try {
+      socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    } catch {
+      // ignore
+    }
+  });
   server.listen(bridge.port, bridge.host, () => {
     log(root, `bridge ready at http://${bridge.host}:${bridge.port}/v1`);
   });
-  const state = { server, baseUrl: `http://${bridge.host}:${bridge.port}` };
+  state.server = server;
   globalThis.__DSH_OPENVIKING_BRIDGE__ = state;
   ctx.on?.('dispose', () => {
+    if (state.ctx !== ctx) return;
+    state.active = false;
+    try {
+      server.closeAllConnections?.();
+    } catch {
+      // ignore
+    }
     try {
       server.close();
     } catch {
@@ -479,7 +469,6 @@ export async function apply(ctx) {
     root,
     baseUrl: runtime.baseUrl,
     status: 'checking',
-    vlmBaseUrl: runtime.vlm?.baseUrl ?? null,
     bridgeBaseUrl: bridge?.baseUrl ?? null,
   };
 
@@ -487,21 +476,6 @@ export async function apply(ctx) {
   ctx.on?.('dispose', () => {
     for (const item of children) stopChild(item.child, root, item.label);
   });
-
-  if (runtime.vlm && !(await healthy(runtime.vlm))) {
-    if (runtime.vlm.attachOnly) {
-      log(root, `vlm not healthy and attachOnly=true: ${runtime.vlm.baseUrl}`);
-    } else {
-      const child = startService(root, runtime.vlm, 'vlm');
-      if (child) {
-        children.push({ child, label: 'vlm' });
-        globalThis.__DSH_OPENVIKING_RUNTIME__.vlmPid = child.pid;
-        await waitHealthy(root, runtime.vlm, child, 'vlm');
-      }
-    }
-  } else if (runtime.vlm) {
-    log(root, `vlm already healthy at ${runtime.vlm.baseUrl}`);
-  }
 
   if (await healthy(runtime.server)) {
     globalThis.__DSH_OPENVIKING_RUNTIME__.status = 'ready';
