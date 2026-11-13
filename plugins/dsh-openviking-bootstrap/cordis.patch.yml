@@ -1,0 +1,3 @@
+- insert:
+    - id: openviking-bootstrap
+      name: '@local/dsh-openviking-bootstrap'

@@ -64,3 +64,9 @@ deepseek-harness/.dsh/.env.bak-*
 
 # ===== 隔离沙箱宿主（可重建，不入库）=====
 .harness-sandbox/
+
+# ===== OpenViking 本地运行时（体积大/可重建，不入库）=====
+runtime/openviking/venv/
+runtime/openviking/models/
+runtime/openviking/data/
+runtime/openviking/logs/

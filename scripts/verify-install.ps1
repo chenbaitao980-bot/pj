@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 <#
   Verify that a DeepSeek Harness frozen tree carries every local customization.
 
@@ -142,7 +142,7 @@ Check 'profile package.json found' ($null -ne $profileDir) 'looked in dsh-home, 
 if ($profileDir) {
     $profile = ReadJson (Join-Path $profileDir 'package.json')
     $bundles = @($profile.dsh.profile.bundles)
-    foreach ($plugin in @('@local/dsh-toolcall-tone', '@local/dsh-multi-workspace', '@local/dsh-side-chat', '@local/dsh-plugin-slash', '@local/dsh-websearch-preference', '@local/dsh-todo-nudge', '@local/dsh-task-board', '@local/dsh-session-panel', '@local/dsh-session-tracker', 'dsh-mobile', 'dsh-mcp-agent-desktop', 'billion-context', 'dsh-codex-cua')) {
+    foreach ($plugin in @('@local/dsh-toolcall-tone', '@local/dsh-multi-workspace', '@local/dsh-side-chat', '@local/dsh-plugin-slash', '@local/dsh-websearch-preference', '@local/dsh-todo-nudge', '@local/dsh-task-board', '@local/dsh-session-panel', '@local/dsh-session-tracker', '@local/dsh-openviking-bootstrap', '@openviking/dsh-memory-plugin', 'dsh-mobile', 'dsh-mcp-agent-desktop', 'billion-context', 'dsh-codex-cua')) {
         $registered = $bundles -contains $plugin
         Check ("plugin registered: {0}" -f $plugin) $registered
         $moduleDir = Join-Path $profileDir ('node_modules\' + ($plugin -replace '/', '\'))
@@ -153,6 +153,8 @@ if ($profileDir) {
             '@local/dsh-websearch-preference' { @('index.js') }
             '@local/dsh-todo-nudge' { @('index.js') }
             '@local/dsh-session-panel' { @('index.js', 'client.js', 'vcs.js') }
+            '@local/dsh-openviking-bootstrap' { @('index.js', 'cordis.patch.yml') }
+            '@openviking/dsh-memory-plugin' { @('index.mjs', 'config.mjs', 'cordis.patch.yml') }
             # Codex computer-use 引擎：自带 vendor 运行时，少一个文件就只剩空工具表。
             'dsh-codex-cua' { @('lib\index.js', 'mcp\server.mjs', 'cordis.patch.yml', 'vendor\@oai\sky\package.json', 'vendor\@oai\sky\bin\windows\codex-computer-use.exe', 'vendor\node_modules\@statsig\js-client\package.json') }
             default { @('index.js', 'client.js') }
@@ -168,6 +170,16 @@ if ($profileDir) {
     $sideChatClient = Join-Path $profileDir 'node_modules\@local\dsh-side-chat\client.js'
     Check 'side-chat: shared-memory host bridge' ((HasMarker $sideChatIndex 'side-chat-memory') -and (HasMarker $sideChatIndex 'agent/pre-step')) $sideChatIndex
     Check 'side-chat: parent session title marker' ((HasMarker $sideChatClient 'SIDE_TITLE_MARK') -and (HasMarker $sideChatClient 'markSideSession')) $sideChatClient
+
+    # 0.2.11-rc.24+: OpenViking 作为 DSH 的长期记忆层。
+    # bootstrap 必须能在宿主启动时拉起 VLM + Server，并暴露 DSH 模型 bridge；
+    # memory 插件必须带官方 bundle patch，否则 profile 里只有目录没有运行时。
+    $ovBootstrap = Join-Path $profileDir 'node_modules\@local\dsh-openviking-bootstrap\index.js'
+    $ovMemory = Join-Path $profileDir 'node_modules\@openviking\dsh-memory-plugin\index.mjs'
+    $ovMemoryPatch = Join-Path $profileDir 'node_modules\@openviking\dsh-memory-plugin\cordis.patch.yml'
+    Check 'openviking: bootstrap host bridge' ((HasMarker $ovBootstrap 'openviking-memory-bridge') -and (HasMarker $ovBootstrap 'startBridge')) $ovBootstrap
+    Check 'openviking: memory plugin entry' (HasMarker $ovMemory 'openviking-memory') $ovMemory
+    Check 'openviking: memory bundle patch' (HasMarker $ovMemoryPatch 'openviking-memory-runtime') $ovMemoryPatch
 
     # dsh-purge 的 revert 会先还原 bundle 再按 FROZEN_PATCH_SCRIPTS 重打。
     # 若是旧列表，revert 会把副会话重新隐藏；tree/notes 必须在列表里且 hide 不在。
