@@ -12,6 +12,19 @@
 
 ---
 
+## Red Line: Upstream Alignment（红线）
+
+冻结版**禁止**在没有用户确认的情况下对齐官方上游版本或功能。任何"对齐官方/升级底座/吸收上游功能"的任务必须先执行 `.trellis/spec/frozen/upstream-alignment.md` 的四步闸门：
+
+1. 列出官方版本与逐项功能更新；
+2. 逐项做 **dsh-purge 冲突检查**（补丁目标、`.dshpurge.bak`、锚点、行为）；
+3. **与 dsh-purge 冲突的功能一律不对齐**；
+4. 把清单与冲突结论交给用户，**由用户决定是否对齐、对齐哪些**——未确认前不得改动。
+
+越过此线视为违反项目规范，改动必须回退。
+
+---
+
 ## Trellis System
 
 ### Developer Identity

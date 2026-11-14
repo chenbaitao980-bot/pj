@@ -1,0 +1,31 @@
+{
+  "id": "computer-use-audit",
+  "name": "computer-use-audit",
+  "title": "computer-use 插件能力审计与本地增强",
+  "description": "审计 dsh-computer-use-win 0.5.6 的 Windows 操作覆盖（对照 Codex 电脑使用），补齐剪贴板读写、窗口最大化/最小化/还原/缩放、三连击、光标与屏幕信息，并在屏幕外测试窗口验证。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "plugin",
+  "package": "dsh-computer-use-win",
+  "priority": "P1",
+  "creator": "Administrator",
+  "assignee": "Administrator",
+  "createdAt": "2026-11-10",
+  "completedAt": "2026-11-10",
+  "branch": "fix/frozen-trellis-autoinit-rebuild",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "vendor/dsh-computer-use-win/mcp/server.mjs",
+    "vendor/dsh-computer-use-win/mcp/settings.mjs",
+    "vendor/dsh-computer-use-win/mcp/client.js",
+    "vendor/dsh-computer-use-win/scripts/windows-uia.ps1"
+  ],
+  "notes": "本地增强版 0.5.6-dsh.1；不随冻结包自动分发（放在 vendor/）。激活需重启 DSH 或插件页停用→启用。",
+  "meta": {}
+}

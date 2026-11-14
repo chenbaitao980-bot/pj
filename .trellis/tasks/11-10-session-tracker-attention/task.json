@@ -1,0 +1,30 @@
+{
+  "id": "session-tracker-attention",
+  "name": "session-tracker-attention",
+  "title": "会话追踪面板 + 待回答置顶提醒窗",
+  "description": "左侧栏顶部新增可折叠的会话追踪面板（运行中 / 待回答 / 已完成未确认）；会话提问、审批或计划待审时，若主窗口隐藏/最小化/未聚焦，弹置顶提醒小窗，点击回到该会话。",
+  "status": "done",
+  "dev_type": "feature",
+  "scope": "frozen",
+  "package": "dsh-session-tracker",
+  "priority": "P1",
+  "creator": "Administrator",
+  "assignee": "Administrator",
+  "createdAt": "2026-11-10",
+  "completedAt": "2026-11-10",
+  "branch": "fix/frozen-trellis-autoinit-rebuild",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "plugins/dsh-session-tracker/client.js",
+    "frozen-build-src/patch-session-tracker.js",
+    "frozen-build-src/patch-desktop-attention.js"
+  ],
+  "notes": "版本 0.2.11-rc.12；见 docs/releases/0.2.11-rc.12.md",
+  "meta": {}
+}
