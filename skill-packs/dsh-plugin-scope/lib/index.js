@@ -15,15 +15,15 @@
  *
  * 只依赖 node: 内置模块；写文件走「临时文件 + 改名」，不会写出半个 JSON。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const name = 'plugin-scope';
 
-/** 需要 commands 服务。 */
-const inject = ['commands'];
+/** 需要 commands 与 systemPrompt 服务。 */
+const inject = ['commands', 'systemPrompt'];
 
 /** 可以按工作区开关的插件（键名与插件里 resolveScope 的 key 一致）。 */
 const PLUGINS = ['trellis', 'gitnexus', 'codegraph'];
@@ -32,6 +32,47 @@ const ACTIONS = new Set(['on', 'off', 'autoinit-on', 'autoinit-off']);
 
 function scopeFile(root) {
   return join(root, '.dsh', 'plugins.json');
+}
+
+/** 每个工作区的自定义注入提示词（纯文本 / Markdown）。 */
+function promptFile(root) {
+  return join(root, '.dsh', 'prompt.md');
+}
+
+/** 提示词文件按 mtime 缓存，避免每一步 system prompt 都读盘。 */
+const promptCache = new Map();
+const PROMPT_CACHE_LIMIT = 64;
+const PROMPT_MAX_CHARS = 20000;
+
+/** 读取工作区自定义提示词；不存在或读失败返回空串。 */
+function readPrompt(root) {
+  const file = promptFile(root);
+  try {
+    const info = statSync(file);
+    const hit = promptCache.get(file);
+    if (hit !== undefined && hit.mtimeMs === info.mtimeMs) return hit.value;
+    const value = readFileSync(file, 'utf8').slice(0, PROMPT_MAX_CHARS).trim();
+    if (promptCache.size > PROMPT_CACHE_LIMIT) promptCache.clear();
+    promptCache.set(file, { mtimeMs: info.mtimeMs, value });
+    return value;
+  } catch {
+    return '';
+  }
+}
+
+/** 写入工作区自定义提示词；空文本删除文件。 */
+function writePrompt(root, text) {
+  const file = promptFile(root);
+  const value = String(text ?? '').slice(0, PROMPT_MAX_CHARS);
+  if (value.trim() === '') {
+    try { rmSync(file, { force: true }); } catch { /* ignore */ }
+    return '';
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, value, 'utf8');
+  renameSync(tmp, file);
+  return file;
 }
 
 function readScope(root) {
@@ -102,9 +143,14 @@ function parseInput(rawInput) {
   const head = tokens[0].toLowerCase();
   if (head === 'status') return { kind: 'status' };
   if (head === 'reset') return { kind: 'reset' };
+  if (head === 'prompt') return { kind: 'prompt' };
+  if (head === 'prompt-clear') return { kind: 'prompt-clear' };
+  if (head === 'prompt-set') return { kind: 'prompt-set', text: String(rawInput ?? '').trim().slice('prompt-set'.length).trim() };
   const plugin = head === 'all' ? '*' : head;
-  if (plugin !== '*' && !PLUGINS.includes(plugin)) {
-    return { kind: 'error', text: `未知插件：${head}（可用：${PLUGINS.join(' / ')} / all）` };
+  // Any installed plugin may be recorded per workspace; the ones that read
+  // <workspace>/.dsh/plugins.json enforce it themselves.
+  if (plugin !== '*' && !/^[@a-zA-Z0-9._/-]+$/u.test(plugin)) {
+    return { kind: 'error', text: `插件名不合法：${head}（写插件包名或短名，或 all）` };
   }
   const action = (tokens[1] ?? '').toLowerCase();
   if (!ACTIONS.has(action)) {
@@ -160,12 +206,32 @@ async function ensurePanel(ctx, config) {
 function apply(ctx, config = {}) {
   if (config.enabled === false) return;
   void ensurePanel(ctx, config);
+  // 面板是 detached 的辅助进程：宿主启动时只管一次，进程一旦退出，插件页
+  // 上的地址就成了死链。宿主存活期间定期探测，掉线就重新拉起。
+  const watchdog = setInterval(() => { void ensurePanel(ctx, config); }, 30000);
+  watchdog.unref?.();
+  ctx.effect(() => () => clearInterval(watchdog), 'plugin-scope: panel watchdog');
+
+  // 每个工作区的自定义注入提示词：按会话的原始项目目录读 <root>/.dsh/prompt.md。
+  // 会话中途切换 working directory 不收窄作用域——工作区提示属于项目根。
+  ctx.systemPrompt.section({
+    name: 'plugin-scope:workspace-prompt',
+    order: 9100,
+    text: (context) => {
+      const agent = context.agent;
+      if (agent === undefined) return '';
+      const root = agent.session?.header?.cwd;
+      if (typeof root !== 'string' || root === '') return '';
+      const text = readPrompt(root);
+      return text === '' ? '' : `# 本工作区自定义提示\n${text}`;
+    },
+  });
 
   ctx.commands.register({
     name: 'pluginscope',
-    description: '按工作区开关 trellis / gitnexus / codegraph（写 <工作区>/.dsh/plugins.json）',
+    description: '按工作区开关插件（写 <工作区>/.dsh/plugins.json；读取该文件的插件真正生效）',
     input: {
-      hint: '[status|reset|<trellis|gitnexus|codegraph|all> <on|off|autoinit-on|autoinit-off>]',
+      hint: '[status|reset|<插件名|all> <on|off|autoinit-on|autoinit-off>]',
     },
     handler: async (invocation) => {
       try {
@@ -187,6 +253,27 @@ function apply(ctx, config = {}) {
           if (!existsSync(file)) return { kind: 'success', text: `工作区没有配置文件，无需重置：${root}` };
           writeScope(root, {});
           return { kind: 'success', text: `已重置工作区配置（清空）：${file}` };
+        }
+
+        if (parsed.kind === 'prompt') {
+          const text = readPrompt(root);
+          return {
+            kind: 'success',
+            text: `工作区：${root}\n文件：${promptFile(root)}${existsSync(promptFile(root)) ? '' : '（不存在）'}\n\n${text === '' ? '(空)' : text}`,
+          };
+        }
+
+        if (parsed.kind === 'prompt-clear') {
+          writePrompt(root, '');
+          return { kind: 'success', text: `已清空工作区自定义提示词：${root}` };
+        }
+
+        if (parsed.kind === 'prompt-set') {
+          const file = writePrompt(root, parsed.text);
+          return {
+            kind: 'success',
+            text: parsed.text === '' ? `已清空工作区自定义提示词：${root}` : `已写入工作区自定义提示词：${file}`,
+          };
         }
 
         const data = applyEntry(readScope(root), parsed.plugin, parsed.action);
