@@ -1,4 +1,9 @@
-# DeepSeek Harness 冻结版 · 单文件安装包（0.2.2-rc.1）
+﻿# DeepSeek Harness 冻结版 · 单文件安装包
+
+> **最新版：0.2.11-rc.16** — 产物 `DeepSeek-Harness-Frozen-Setup-0.2.11-rc.16.exe`（483.6 MiB / 507,083,739 B，SHA-256 `D36D55F89D37C5DE3DCF7EA92BF39037AE936623A3B81AF09C3A8CE86E6B467B`），
+> 改动与验证见 `docs/releases/0.2.11-rc.16.md`（启动前清理累积的 `dsh-auth-*` cookie，修「desktop welcome: Web authentication failed」启动失败）；rc.15 修任务面板的模型路由，rc.14 修会话日志损坏，rc.13 修升级丢插件；rc.1–rc.15 的连续记录也在同目录。
+> 下文表格与「这一版改了什么」描述的是 **0.2.2-rc.1 基线**，安装 / 升级 / 自检 / 重新打包的流程至今不变。
+
 
 | 项目 | 值 |
 |---|---|

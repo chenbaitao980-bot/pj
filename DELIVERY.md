@@ -51,9 +51,9 @@ DryRun -Force    新增 0 / 更新 0 / 相同 831 / 冲突 0 / 已删 0
 
 ## 四、冻结包
 
-`DeepSeek-Harness-Frozen-Setup-0.2.2-rc.1.exe`　438,386,022 字节　SHA256 `02C57D77B15A16394EF010C5BC6BF610FF6388670F9620A600E711D8F349DFE9`
+`DeepSeek-Harness-Frozen-Setup-0.2.11-rc.11.exe`　507,049,058 字节　SHA256 `9A4C33A123BAF2BE0B7B0D6F54616E91BA4BC7FD47760869888D5D1796632A3C`
 
-内含：0.2.2-rc.1 宿主（purge 已打、更新器已禁）+ 12 个 bundle + 90 技能 + GitNexus/CodeGraph/Trellis + `dsh-plugin-scope` + `tools/*` + 全套运维脚本。
+内含：0.2.11-rc.11 宿主（purge 已打、更新器已禁）+ 12 个 bundle + 90 技能 + GitNexus/CodeGraph/Trellis + `dsh-plugin-scope` + `tools/*` + 全套运维脚本。
 
 ## 五、只剩三步需要你点头（都不需要我改宿主）
 

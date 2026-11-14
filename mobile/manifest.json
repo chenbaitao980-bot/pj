@@ -1,54 +1,65 @@
 {
-    "generatedAt":  "2026-11-07T22:01:41.2117630+08:00",
-    "apps":  [
-                 {
-                     "role":  "mobile-remote-client",
-                     "name":  "DSH Remote",
-                     "repo":  "Hyna-hla/harness-remote",
-                     "tag":  "v2.5.1",
-                     "asset":  "DSH-Remote-v2.5.1.apk",
-                     "sizeBytes":  68530656,
-                     "sha256":  "A7CEE19B565BC670C5AEF2F38F48503793F195BFE6AA4BD55ED4548CCBE78A42",
-                     "sourceUrl":  "https://github.com/Hyna-hla/harness-remote/releases/download/v2.5.1/DSH-Remote-v2.5.1.apk",
-                     "notes":  "连接 PC 上正在运行的 DSH；前台服务常驻通知（后台运行/审批提醒）；同一实例，插件与桌面冻结版天然一致"
-                 },
-                 {
-                     "role":  "mobile-access-plugin",
-                     "name":  "dsh-mobile",
-                     "repo":  "saya-ch/dsh-mobile",
-                     "tag":  "0.8.4",
-                     "asset":  "dsh-mobile-0.8.4.tgz",
-                     "sizeBytes":  28203006,
-                     "sha256":  "BF151441687C96EF37A3405DBF6D8BBDA20ECBC7240958FF453995D1F71BF749",
-                     "sourceUrl":  "https://registry.npmjs.org/dsh-mobile/-/dsh-mobile-0.8.4.tgz",
-                     "notes":  "DSH 插件：手机/PWA 访问（LAN、Cloudflare Tunnel、Caddy、自建 FRP、cpolar、iroh）、Web Push、移动端布局适配；装进 profile 后与桌面共用同一实例与插件"
-                 }
-             ],
-    "candidates":  [
-                       {
-                           "name":  "DSHBox",
-                           "repo":  "WSK-build/DSHBox",
-                           "notes":  "Android 本机跑完整 DSH（PRoot+Debian+Node），独立实例"
-                       },
-                       {
-                           "name":  "deepseek-harness-android",
-                           "repo":  "guzhou079-arch/deepseek-harness-android",
-                           "notes":  "打包 runtime+技能的 APK"
-                       },
-                       {
-                           "name":  "DSH_Mobile",
-                           "repo":  "jayantTang/DSH_Mobile",
-                           "notes":  "iOS 原生客户端 + 自建 WSS relay"
-                       },
-                       {
-                           "name":  "dsh-mini-remote",
-                           "repo":  "xingzhen199186/dsh-mini-remote",
-                           "notes":  "移动 Web 遥控（LAN/Tailscale/CF Tunnel）"
-                       },
-                       {
-                           "name":  "dsh-voice-gate",
-                           "repo":  "yangfei222666-9/dsh-voice-gate",
-                           "notes":  "语音优先的移动入口（PWA）"
-                       }
-                   ]
+    "generatedAt": "2026-11-08T13:55:00+08:00",
+    "apps": [
+        {
+            "role": "mobile-client",
+            "name": "DSH Mobile (official)",
+            "repo": "saya-ch/dsh-mobile",
+            "tag": "android-v0.7.2",
+            "asset": "dsh-mobile-android-v0.7.2.apk",
+            "sizeBytes": 2342281,
+            "sha256": "22FFD92C9F245BD521724399CDB08B0A81D5BA542D177F2E4BF619936C9F7B14",
+            "sourceUrl": "https://github.com/saya-ch/dsh-mobile/releases/download/android-v0.7.2/dsh-mobile-android-v0.7.2.apk",
+            "notes": "官方伴生 App：唯一实现 dsh-mobile 配对协议（native-pair / dsh1. 前缀 + LAN 私有 CA 钉扎）。扫码一次即配对，设备令牌 90 天、会话 8 小时自动续；固定地址下无需重复扫码。"
+        },
+        {
+            "role": "mobile-remote-client",
+            "name": "DSH Remote",
+            "repo": "Hyna-hla/harness-remote",
+            "tag": "v2.5.1",
+            "asset": "DSH-Remote-v2.5.1.apk",
+            "sizeBytes": 68530656,
+            "sha256": "A7CEE19B565BC670C5AEF2F38F48503793F195BFE6AA4BD55ED4548CCBE78A42",
+            "sourceUrl": "https://github.com/Hyna-hla/harness-remote/releases/download/v2.5.1/DSH-Remote-v2.5.1.apk",
+            "notes": "连接 PC 上正在运行的 DSH；前台服务常驻通知。注意：协议与 dsh-mobile 网关不兼容——其 APK 内不含 mobile-access / dsh1. / instance= 任何字符串，扫 dsh-mobile 的配对码只会请求 / 并得到 401。仅作第三方客户端备选。"
+        },
+        {
+            "role": "mobile-access-plugin",
+            "name": "dsh-mobile",
+            "repo": "saya-ch/dsh-mobile",
+            "tag": "0.8.4",
+            "asset": "dsh-mobile-0.8.4.tgz",
+            "sizeBytes": 28203006,
+            "sha256": "BF151441687C96EF37A3405DBF6D8BBDA20ECBC7240958FF453995D1F71BF749",
+            "sourceUrl": "https://registry.npmjs.org/dsh-mobile/-/dsh-mobile-0.8.4.tgz",
+            "notes": "DSH 插件：手机/PWA 访问（LAN、Cloudflare Tunnel、Caddy、自建 FRP、cpolar、iroh）、Web Push、移动端布局适配；装进 profile 后与桌面共用同一实例与插件"
+        }
+    ],
+    "candidates": [
+        {
+            "name": "DSHBox",
+            "repo": "WSK-build/DSHBox",
+            "notes": "Android 本机跑完整 DSH（PRoot+Debian+Node），独立实例"
+        },
+        {
+            "name": "deepseek-harness-android",
+            "repo": "guzhou079-arch/deepseek-harness-android",
+            "notes": "打包 runtime+技能的 APK"
+        },
+        {
+            "name": "DSH_Mobile",
+            "repo": "jayantTang/DSH_Mobile",
+            "notes": "iOS 原生客户端 + 自建 WSS relay"
+        },
+        {
+            "name": "dsh-mini-remote",
+            "repo": "xingzhen199186/dsh-mini-remote",
+            "notes": "移动 Web 遥控（LAN/Tailscale/CF Tunnel）"
+        },
+        {
+            "name": "dsh-voice-gate",
+            "repo": "yangfei222666-9/dsh-voice-gate",
+            "notes": "语音优先的移动入口（PWA）"
+        }
+    ]
 }

@@ -4,19 +4,20 @@
 
 本仓库汇总本机部署 DeepSeek Harness 所需的安装脚本、配置说明、配套插件与工具链，方便在新机器上一键复现。
 
-## 冻结版 0.2.2-rc.1（本次更新）
+## 冻结版 0.2.11-rc.16（本次更新）
 
 | 入口 | 说明 |
 |---|---|
-| `DeepSeek-Harness-Frozen-Setup-0.2.2-rc.1.exe` | 单文件离线安装包（418 MB），内含宿主 + 插件 + 技能 + MCP + 便携 PostgreSQL |
-| `README-冻结版安装包.md` | 安装 / 升级 / 自检 / 按工作区开关插件 / 重新打包 |
+| `DeepSeek-Harness-Frozen-Setup-0.2.11-rc.16.exe` | 单文件离线安装包（483.6 MiB / 507,083,739 B），SHA-256 `D36D55F89D37C5DE3DCF7EA92BF39037AE936623A3B81AF09C3A8CE86E6B467B` |
+| `docs/releases/0.2.11-rc.16.md` | 本版改动与验证记录（启动前自动清理累积的 `dsh-auth-*` cookie，修「desktop welcome: Web authentication failed」启动失败；rc.15 的任务面板模型路由、rc.14 的会话日志自愈也记在同目录） |
+| `README-冻结版安装包.md` | 安装 / 升级 / 自检 / 按工作区开关插件 / 重新打包（正文以 0.2.2 基线为例，流程不变） |
 | `VERSION-DIFF-0.2.1-rc.5-vs-0.2.2-rc.1.md` | 与官方最新版的逐项差异（26 个新包、主进程重写、CLI 变化） |
 | `frozen-build-src/` | 构建与运维脚本：`Build-FrozenSetup.ps1`、`install.ps1`、`Launch.ps1`、`Upgrade.ps1`、`Plugin-Scope.ps1`、`Doctor.ps1`、`Repair-Plugins.ps1` |
 | `skill-packs/dsh-skill-trellis` | Trellis 2.0.0：SessionStart 注入 + 缺 `.trellis` 自动初始化 |
 | `skill-packs/dsh-mcp-gitnexus` | GitNexus MCP 插件（默认启用 + 自动建索引 + 按工作区开关） |
 | `skill-packs/dsh-mcp-codegraph` | CodeGraph MCP 插件（默认启用 + 自动建索引 + 按工作区开关） |
 
-> 旧版 `DeepSeek-Harness-Frozen-Setup.exe`（0.2.1-rc.5）保留用于回滚。
+> 0.2.11-rc.16 为最新；rc.15–rc.8 全部保留（回滚用）；更早的 0.2.10 / rc.1–rc.7 已删除。
 
 ## 目录结构
 
