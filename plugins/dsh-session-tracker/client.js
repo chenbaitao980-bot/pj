@@ -451,9 +451,9 @@ window.__ModuleLoader__.load({
       const pendingRows = pending.map(function (entry) {
         return row(entry, withScope(entry, t('status.' + entry.kind)), COLOR[entry.kind], true);
       });
-      const runningRows = running.map(function (entry) {
-        return row(entry, withScope(entry, relativeTime(entry.updatedAt, now, t) || t('row.running')), COLOR.running, false);
-      });
+      // Running Sessions are surfaced by the header badge only ("{n} 运行").
+      // Listing them again below duplicated rows that the sidebar's own session
+      // list already shows, so the section body carries pending + done only.
       const doneRows = done.map(function (entry) {
         return row(entry, withScope(entry, relativeTime(entry.updatedAt, now, t) || t('row.done')), COLOR.done, false);
       });
@@ -485,9 +485,8 @@ window.__ModuleLoader__.load({
             badge('badge.done', done.length, COLOR.done),
             total === 0 ? h('span', { style: styles.quiet }, t('all.idle')) : null),
           h('span', { style: styles.chevron, 'aria-hidden': true }, collapsed ? '▸' : '▾')),
-        collapsed || total === 0 ? null : h('div', { style: styles.body },
+        collapsed || total === 0 || (pendingRows.length === 0 && doneRows.length === 0) ? null : h('div', { style: styles.body },
           section(t('section.pending'), pendingRows),
-          section(t('section.running'), runningRows),
           section(t('section.done'), doneRows)));
     }
 

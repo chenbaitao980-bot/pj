@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Task board",
+    "description": "The todo board above the composer: live progress plus the agent's current action, one panel per Subagent, and the task guardian's end-of-turn verdict (unfinished rows read Not done / Needs you, never Pending)."
+  }
+}

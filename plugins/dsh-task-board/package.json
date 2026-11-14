@@ -1,0 +1,31 @@
+{
+  "name": "@local/dsh-task-board",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "会话底部的任务面板：实时显示 todo_write 清单与智能体当前动作；每个子 agent 一块，可切换查看；回合结束后显示任务守护的审计结论（完成/未完成/待确认）。",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}

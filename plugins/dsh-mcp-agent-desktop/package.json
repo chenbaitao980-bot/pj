@@ -1,0 +1,30 @@
+{
+  "name": "dsh-mcp-agent-desktop",
+  "version": "1.0.0",
+  "description": "agent-desktop（vercel-labs）MCP 服务（随冻结版内置、默认启用）：注册 mcp__agent-desktop__desktop_* 工具，并在会话第一步注入「快照 → 引用 → 操作」的使用约束。",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "agent-desktop",
+    "computer-use",
+    "accessibility",
+    "deepseek-harness"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

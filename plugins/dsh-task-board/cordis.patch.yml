@@ -1,0 +1,3 @@
+- insert:
+    - id: task-board
+      name: '@local/dsh-task-board'

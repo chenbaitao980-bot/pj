@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Task guardian",
+    "description": "Asks the model to keep a todo_write list; when it does not, a small guardian model plans, audits and adjusts tasks from the agent's real actions, settles every open row when the turn ends, and asks once to continue abandoned work."
+  }
+}

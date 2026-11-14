@@ -1,0 +1,22 @@
+# dsh-mcp-agent-desktop · 冻结版内置 MCP（vercel-labs/agent-desktop）
+# 安装器会把 __FROZEN_VENDOR__ 换成本机绝对路径；
+# 手工改配置时保留占位符以外的内容即可。
+- insert:
+    # 插件本体：会话第一步注入 desktop_* 工具的使用约束
+    - id: dsh-mcp-agent-desktop
+      name: dsh-mcp-agent-desktop
+      config:
+        enabled: true
+    # MCP 服务：mcp__agent-desktop__*（67 个 desktop_* 工具，原生 exe 直连，不经 Node 启动器）
+    - id: mcp-agent-desktop
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        transport: stdio
+        serverName: agent-desktop
+        command: "__FROZEN_VENDOR__/agent-desktop/bin/agent-desktop-win32-x64.exe"
+        args:
+          - mcp
+        env: {}
+        cwd: ""
+        failOnStartupError: false
+        toolCallTimeoutMs: 120000

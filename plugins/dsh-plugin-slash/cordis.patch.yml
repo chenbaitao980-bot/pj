@@ -1,0 +1,3 @@
+- insert:
+    - id: plugin-slash
+      name: '@local/dsh-plugin-slash'

@@ -1,0 +1,29 @@
+{
+  "name": "dsh-codex-cua",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Codex Desktop computer-use engine (@oai/sky + codex-computer-use helper) extracted as a DeepSeek Harness MCP plugin.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./server": "./mcp/server.mjs",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "sync-vendor": "node scripts/sync-vendor.mjs",
+    "selftest": "node mcp/server.mjs --self-test"
+  },
+  "license": "UNLICENSED"
+}

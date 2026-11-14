@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Web search preference",
+    "description": "When the websearch plugin is installed, prefer web_search_meta and fall back to the built-in web_search only when it returns nothing or fails."
+  }
+}

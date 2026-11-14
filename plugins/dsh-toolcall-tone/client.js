@@ -15,9 +15,34 @@ window.__ModuleLoader__.load({
     /**
      * Classification rules. Each group paints one accent.
      * `prefixes` matches `data-tool` by prefix, `names` matches it exactly.
-     * Edit these lists to retune what counts as MCP, plugin, or neither.
+     * Order matters only for overlapping selectors: later groups win, so the
+     * broad families come first and the prefix-scoped ones (mcp / plugin) last.
      */
     const GROUPS = [
+      {
+        id: 'edit',
+        accent: '#3b82f6',
+        prefixes: [],
+        names: ['write', 'edit', 'apply_patch', 'create_file', 'str_replace', 'notebook_edit'],
+      },
+      {
+        id: 'exec',
+        accent: '#10b981',
+        prefixes: [],
+        names: ['bash', 'pwsh', 'shell', 'exec', 'run_command', 'run_terminal_cmd'],
+      },
+      {
+        id: 'read',
+        accent: '#64748b',
+        prefixes: [],
+        names: ['read', 'read_image', 'view_image', 'grep', 'glob', 'ls', 'list_dir', 'web_fetch', 'web_search', 'web_search_meta'],
+      },
+      {
+        id: 'think',
+        accent: '#06b6d4',
+        prefixes: [],
+        names: ['todo_write', 'todo_read', 'update_plan', 'plan', 'think', 'task', 'subagent', 'workflow'],
+      },
       {
         id: 'mcp',
         accent: '#7c5cff',

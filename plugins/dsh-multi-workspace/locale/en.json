@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Multiple workspaces",
-    "description": "Attaches extra workspace roots to one session so the agent can work across directories by absolute path."
+    "description": "Attach several workspace roots to one Session; the picker can select multiple workspaces, the first is the main root, and the model reads the rest by absolute path."
   }
 }

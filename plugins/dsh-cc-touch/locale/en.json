@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Sidebar feel",
+    "description": "Adds a two-step hover fill and a 120ms ease-out-snap transition to the sidebar rows and icon buttons, matching Claude Code's hover feel."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Plugin menu",
+    "description": "Adds a Plugins group to the composer's / menu: lists enabled plugins with their descriptions and inserts the plugin name into the draft when picked."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "联网搜索优先级",
+    "description": "装了 websearch 插件时，优先用 web_search_meta 搜互联网，空结果或失败才回退内置 web_search。"
+  }
+}

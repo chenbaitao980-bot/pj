@@ -1,0 +1,13 @@
+# dsh-codex-cua — DSH bundle patch layer
+#
+# Inserts the plugin entry itself. The plugin then mounts mcp/server.mjs through
+# @deepseek-ai/dsh-mcp-client, so the model sees mcp__cua__<tool>.
+- insert:
+    - id: dsh-codex-cua
+      name: dsh-codex-cua
+      config:
+        serverName: cua
+        approval: auto
+        requestTimeoutMs: 30000
+        toolCallTimeoutMs: 120000
+        failOnStartupError: false
