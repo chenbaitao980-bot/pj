@@ -4,19 +4,22 @@
  *
  *   node plugin-scope-ui.mjs [--port 8799] [--home <DSH_HOME>] [--no-open]
  *
- * 只读写 <工作区>/.dsh/plugins.json，不碰宿主进程、不改 profile。
- * 面板列出 profile 里**所有已安装插件**；其中带 lib/scope.js 的插件原生支持工作区作用域，
- * 其余插件只能记录配置（插件本身还没实现作用域读取），UI 会标出来，避免误解。
+ * 只读写 <工作区>/.dsh/plugins.json 与 <工作区>/.dsh/prompt.md，不碰宿主进程、不改 profile。
+ * 面板列出 profile 里**所有已安装插件**；它们都是 profile 全局插件，按工作区记录开关。
+ * 插件是否真正按工作区生效取决于它是否读取 <工作区>/.dsh/plugins.json（trellis /
+ * gitnexus / codegraph 已实现；其余插件目前只记录，等插件侧接上同一份数据）。
+ * 每个工作区还可以写一段自定义注入提示词，Host 侧随该工作区的 system prompt 注入。
  *
  * 路由：
  *   GET  /                 面板
- *   GET  /api/state        工作区 × 插件 状态
+ *   GET  /api/state        工作区 × 插件 状态 + 自定义提示词
  *   POST /api/set          { root, plugin, patch:{enabled,autoInit} }
  *   POST /api/reset        { root }
+ *   POST /api/prompt       { root, text }  写 <工作区>/.dsh/prompt.md
  *   GET  /usage?range=30d  Token 用量仪表盘（复用 tools/usage-report.mjs）
  */
 import { createServer } from 'node:http';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +40,23 @@ function readJson(path, fallback) {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return fallback; }
 }
 function scopeFile(root) { return join(root, '.dsh', 'plugins.json'); }
+/** 每个工作区的自定义注入提示词（纯文本 / Markdown）。 */
+function promptFile(root) { return join(root, '.dsh', 'prompt.md'); }
+function readPromptFile(root) {
+  try { return readFileSync(promptFile(root), 'utf8').slice(0, 20000); } catch { return ''; }
+}
+function writePromptFile(root, text) {
+  const abs = resolve(root);
+  if (!existsSync(abs)) throw new Error(`工作区不存在：${abs}`);
+  const file = promptFile(abs);
+  const value = String(text ?? '').slice(0, 20000);
+  if (value.trim() === '') { try { rmSync(file, { force: true }); } catch { /* ignore */ } return file; }
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  writeFileSync(tmp, value, 'utf8');
+  renameSync(tmp, file);
+  return file;
+}
 
 /* ───────── 工作区发现 ───────── */
 function workspaces() {
@@ -129,7 +149,9 @@ function listPlugins() {
       name,
       version: info?.version ?? '',
       globalEnabled,
-      supportsScope: existsSync(join(dir, 'lib', 'scope.js')),
+      // Every installed plugin is a profile-global row: per-workspace scope is
+      // the default, whether or not the plugin already reads the workspace file.
+      supportsScope: true,
       installed: info !== undefined || existsSync(dir),
     });
   }
@@ -144,6 +166,7 @@ function state() {
     return {
       root,
       hasFile: existsSync(scopeFile(root)),
+      prompt: readPromptFile(root),
       overrides: Object.fromEntries(plugins.map((p) => {
         const v = data?.[p.name] ?? {};
         return [p.name, { enabled: v.enabled ?? null, autoInit: v.autoInit ?? null }];
@@ -210,15 +233,20 @@ button.act{background:transparent;border:1px solid var(--line);color:var(--fg);b
 button.act:hover{border-color:var(--accent)}
 .toast{position:fixed;right:18px;bottom:18px;background:#12351f;border:1px solid #22C55E;color:#c7f5d6;padding:9px 14px;border-radius:10px;opacity:0;transition:.2s}
 .toast.show{opacity:1}
+.prompt{margin:6px 0 12px;display:flex;flex-direction:column;gap:6px}
+.prompt label{font-size:12px;color:var(--muted)}
+.prompt textarea{width:100%;min-height:64px;resize:vertical;background:#0c0e13;border:1px solid var(--line);border-radius:8px;color:var(--fg);font:12px/1.5 Consolas,"Microsoft YaHei UI",monospace;padding:8px 10px}
+.prompt textarea:focus{outline:none;border-color:var(--accent)}
+.prompt .actions{display:flex;gap:8px;align-items:center}
+.prompt .hint{font-size:11px;color:var(--muted)}
 .none{color:var(--muted);padding:18px 4px}
 </style></head><body><div class="wrap">
 <h1>按工作区开关插件</h1>
 <div class="sub">写入 &lt;工作区&gt;\\.dsh\\plugins.json　·　与插件运行时同一份数据　·　DSH_HOME: <span id="home"></span></div>
-<div class="sub" style="margin-top:6px">带 <b>作用域</b> 标记的插件会真正按工作区生效；没有标记的插件只是记录配置（它还没实现工作区读取）。全局总开关仍在插件页。</div>
+<div class="sub" style="margin-top:6px">所有全局插件都按工作区记录开关；是否真正按工作区生效取决于插件是否读取 <b>&lt;工作区&gt;\.dsh\plugins.json</b>（trellis / gitnexus / codegraph 已读取）。每个工作区的自定义提示词写在 <b>&lt;工作区&gt;\.dsh\prompt.md</b>，随该工作区的 system prompt 注入。全局总开关仍在插件页。</div>
 <div class="bar">
   <input type="search" id="q" placeholder="搜索插件名或工作区路径…">
   <span class="chip on" data-filter="all" id="f-all">全部</span>
-  <span class="chip" data-filter="scope" id="f-scope">只看支持作用域</span>
   <span class="tag" id="count"></span>
 </div>
 <div id="list"></div>
@@ -241,7 +269,6 @@ function seg(value, onChange, inheritLabel) {
   return wrap;
 }
 function matches(pluginName, wsPath) {
-  if (FILTER === 'scope' && !(DATA.plugins.find((p) => p.name === pluginName)?.supportsScope)) return false;
   if (!QUERY) return true;
   return pluginName.toLowerCase().includes(QUERY) || wsPath.toLowerCase().includes(QUERY);
 }
@@ -257,6 +284,20 @@ function render(data) {
     shown += 1;
     const card = el('div', 'ws');
     card.append(el('div', 'path', ws.root + (ws.hasFile ? '' : '  （无配置，继承 profile）')));
+
+    const promptBox = el('div', 'prompt');
+    promptBox.append(el('label', '', '本工作区自定义注入提示词（写入 .dsh/prompt.md，随会话 system prompt 注入）'));
+    const promptArea = document.createElement('textarea');
+    promptArea.value = ws.prompt || '';
+    promptArea.placeholder = '例如：本仓库用 pnpm；不要改 generated/ 下的文件；回答先用中文总结…';
+    const promptActions = el('div', 'actions');
+    const promptSave = el('button', 'act', '保存提示词');
+    promptSave.onclick = async () => { await api('/api/prompt', { root: ws.root, text: promptArea.value }); toast('提示词已保存'); reload(); };
+    const promptClear = el('button', 'act', '清空');
+    promptClear.onclick = async () => { promptArea.value = ''; await api('/api/prompt', { root: ws.root, text: '' }); toast('已清空'); reload(); };
+    promptActions.append(promptSave, promptClear, el('span', 'hint', '下一个模型请求起生效'));
+    promptBox.append(promptArea, promptActions);
+    card.append(promptBox);
     for (const p of plugins) {
       const ov = ws.overrides[p.name] || { enabled: null, autoInit: null };
       const row = el('div', 'row');
@@ -345,7 +386,7 @@ const server = createServer((req, res) => {
     }
   }
 
-  if (req.method === 'POST' && (url.pathname === '/api/set' || url.pathname === '/api/reset')) {
+  if (req.method === 'POST' && (url.pathname === '/api/set' || url.pathname === '/api/reset' || url.pathname === '/api/prompt')) {
     if (origin.length > 0 && !originAllowed) return send(403, 'text/plain; charset=utf-8', 'forbidden');
     if (req.headers['x-scope-token'] !== TOKEN) return send(403, 'text/plain; charset=utf-8', 'forbidden');
 
@@ -378,6 +419,10 @@ const server = createServer((req, res) => {
         if (url.pathname === '/api/reset') {
           writeState(data.root, 'all', { __reset: true });
           return send(200, 'application/json', JSON.stringify({ ok: true }));
+        }
+        if (url.pathname === '/api/prompt') {
+          const file = writePromptFile(data.root, data.text ?? '');
+          return send(200, 'application/json', JSON.stringify({ ok: true, file }));
         }
         const file = writeState(data.root, data.plugin, data.patch ?? {});
         send(200, 'application/json', JSON.stringify({ ok: true, file }));
