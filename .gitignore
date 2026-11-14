@@ -70,3 +70,11 @@ runtime/openviking/venv/
 runtime/openviking/models/
 runtime/openviking/data/
 runtime/openviking/logs/
+
+# ===== local install/test residue, tmp probes, and manual backups (never commit) =====
+.tmp-*
+.install-test*/
+.cua-probe/
+$out/
+*.exe.bak-*
+backup-cungu-source-sync-*/
