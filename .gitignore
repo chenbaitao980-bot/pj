@@ -78,3 +78,8 @@ runtime/openviking/logs/
 $out/
 *.exe.bak-*
 backup-cungu-source-sync-*/
+# ===== OpenViking 记忆与私有数据（铁律 2026-11-14：只留本地，严禁入库）=====
+runtime/openviking/filestore/
+runtime/openviking/temp/
+runtime/openviking/_system/
+runtime/openviking/models/
