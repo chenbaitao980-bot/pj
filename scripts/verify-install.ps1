@@ -77,6 +77,7 @@ if ($appPkg -and $dshPkg -and $manifest) {
 # ------------------------------------------------------------------ frozen patches
 $conversation = Join-Path $pkgRoot 'dsh-client-ui-conversation\lib\client.js'
 $workspace = Join-Path $pkgRoot 'dsh-client-ui-workspace\lib\client.js'
+$chat = Join-Path $pkgRoot 'dsh-client-ui-chat\lib\client.js'
 $sidebarRight = Join-Path $pkgRoot 'dsh-client-ui-sidebar-right\lib\client.js'
 $sidebarLeft = Join-Path $pkgRoot 'dsh-client-ui-sidebar\lib\client.js'
 $desktopPreload = Join-Path $appRoot 'lib\preload-app.cjs'
@@ -102,6 +103,9 @@ Check 'patch: sidebar session tracker slot' (HasMarker $sidebarLeft 'dsh:sidebar
 $persistence = Join-Path $pkgRoot 'dsh-session-persistence-jsonl\lib\index.js'
 Check 'patch: session log repair (stored log heals)' (HasMarker $persistence 'dsh:session-log-repair')
 Check 'patch: desktop attention bridge' ((HasMarker $desktopPreload 'dsh:desktop-attention') -and (HasMarker $desktopMain 'dsh:desktop-attention'))
+Check 'patch: session row hover prefetch' (HasMarker $workspace 'dsh:cc-prefetch')
+Check 'patch: chat loading skeleton' ((HasMarker $chat 'dsh:cc-skeleton') -and (HasMarker $chat 'dsh:cc-skeleton-class'))
+Check 'patch: chat running label hook' (HasMarker $chat 'dsh:cc-running-label')
 Check 'upgrade: keeps user plugin declarations' (HasMarker (Join-Path $Tree 'Upgrade.ps1') 'dsh:keep-user-plugins')
 
 # 冻结版把补丁脚本随包装在 tools\，revert 后靠它们重打；缺一个就是不可自愈。
@@ -109,7 +113,7 @@ $patchTools = @(
     'patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js',
     'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js',
     'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js',
-    'patch-desktop-attention.js', 'patch-session-log-repair.js'
+    'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-cc-parity.js'
 )
 $toolsDir = Join-Path $Tree 'tools'
 foreach ($tool in $patchTools) {
@@ -142,7 +146,7 @@ Check 'profile package.json found' ($null -ne $profileDir) 'looked in dsh-home, 
 if ($profileDir) {
     $profile = ReadJson (Join-Path $profileDir 'package.json')
     $bundles = @($profile.dsh.profile.bundles)
-    foreach ($plugin in @('@local/dsh-toolcall-tone', '@local/dsh-multi-workspace', '@local/dsh-side-chat', '@local/dsh-plugin-slash', '@local/dsh-websearch-preference', '@local/dsh-todo-nudge', '@local/dsh-task-board', '@local/dsh-session-panel', '@local/dsh-session-tracker', '@local/dsh-openviking-bootstrap', '@openviking/dsh-memory-plugin', 'dsh-mobile', 'dsh-mcp-agent-desktop', 'billion-context', 'dsh-codex-cua')) {
+    foreach ($plugin in @('@local/dsh-toolcall-tone', '@local/dsh-multi-workspace', '@local/dsh-side-chat', '@local/dsh-plugin-slash', '@local/dsh-websearch-preference', '@local/dsh-todo-nudge', '@local/dsh-task-board', '@local/dsh-session-panel', '@local/dsh-session-tracker', '@local/dsh-openviking-bootstrap', '@local/dsh-cc-touch', '@openviking/dsh-memory-plugin', 'dsh-mobile', 'dsh-mcp-agent-desktop', 'billion-context', 'dsh-codex-cua')) {
         $registered = $bundles -contains $plugin
         Check ("plugin registered: {0}" -f $plugin) $registered
         $moduleDir = Join-Path $profileDir ('node_modules\' + ($plugin -replace '/', '\'))
@@ -154,6 +158,7 @@ if ($profileDir) {
             '@local/dsh-todo-nudge' { @('index.js') }
             '@local/dsh-session-panel' { @('index.js', 'client.js', 'vcs.js') }
             '@local/dsh-openviking-bootstrap' { @('index.js', 'cordis.patch.yml') }
+            '@local/dsh-cc-touch' { @('index.js', 'client.js', 'cordis.patch.yml', 'locale\zh.json') }
             '@openviking/dsh-memory-plugin' { @('index.mjs', 'config.mjs', 'cordis.patch.yml') }
             # Codex computer-use 引擎：自带 vendor 运行时，少一个文件就只剩空工具表。
             'dsh-codex-cua' { @('lib\index.js', 'mcp\server.mjs', 'cordis.patch.yml', 'vendor\@oai\sky\package.json', 'vendor\@oai\sky\bin\windows\codex-computer-use.exe', 'vendor\node_modules\@statsig\js-client\package.json') }

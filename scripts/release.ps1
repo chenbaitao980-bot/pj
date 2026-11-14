@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
   Release bookkeeping for the DeepSeek Harness frozen build.
 
@@ -178,7 +178,7 @@ function Set-Version {
     $stamp = (Get-Date).ToString('o')
     foreach ($t in $targets) {
         if (-not (Test-Path $t.path)) { Fail ("missing " + $t.path) }
-        $raw = Get-Content $t.path -Raw -Encoding UTF8
+        $raw = (Get-Content $t.path -Raw -Encoding UTF8).TrimStart([char]0xFEFF)
         $obj = $raw | ConvertFrom-Json
         $before = $obj.version
         $obj.version = $Version
@@ -188,7 +188,17 @@ function Set-Version {
             Write-Host ("dry      {0,-16} {1} -> {2}" -f $t.label, $before, $Version)
         }
         else {
-            Set-Content -Path $t.path -Value $json -Encoding UTF8
+            # Write UTF-8 without BOM. PS 5.1 Set-Content -Encoding UTF8 adds a BOM,
+            # and Electron's main process JSON.parse on resources\app\package.json
+            # dies on it (the app cannot start). Write temp file, swap in, verify.
+            # Keep this block ASCII-only: PS 5.1 reads this BOM-less file as ANSI.
+            $tmp = "$($t.path).new"
+            [IO.File]::WriteAllText($tmp, $json, (New-Object Text.UTF8Encoding($false)))
+            Move-Item -LiteralPath $tmp -Destination $t.path -Force
+            $check = (Get-Content $t.path -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            if ([string]$check.version -ne [string]$Version) {
+                Fail ("version write did not take: {0} (now {1})" -f $t.path, $check.version)
+            }
             Write-Host ("bump     {0,-16} {1} -> {2}" -f $t.label, $before, $Version)
         }
     }

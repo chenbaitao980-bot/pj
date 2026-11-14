@@ -6,9 +6,14 @@ const mainPath = `${appRoot}/lib/main.js`;
 let s = fs.readFileSync(mainPath, "utf8");
 const before = 'enabled = () => app.isPackaged && existsSync(join(process.resourcesPath, "app-update.yml"))';
 const after = "enabled = () => false";
-if (!s.includes(before)) throw new Error("enabled pattern not found");
-s = s.replace(before, after);
-fs.writeFileSync(mainPath, s, "utf8");
+if (s.includes(after)) {
+  // already frozen (payload trees are reused across builds)
+} else if (s.includes(before)) {
+  s = s.replace(before, after);
+  fs.writeFileSync(mainPath, s, "utf8");
+} else {
+  throw new Error("enabled pattern not found");
+}
 
 const pjPath = `${appRoot}/package.json`;
 const pj = JSON.parse(fs.readFileSync(pjPath, "utf8"));

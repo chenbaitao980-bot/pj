@@ -51,6 +51,9 @@ if (!fs.existsSync(profileFile)) {
   process.exit(1);
 }
 
+/** Vendored plugin sources may carry VCS/dep directories; never ship them. */
+const SKIP_NAMES = new Set(['.git', '.github', 'node_modules', '.pnpm', '.DS_Store']);
+
 function mirror(from, to) {
   if (dry) {
     console.log(`dry      ${from} -> ${to}`);
@@ -58,7 +61,7 @@ function mirror(from, to) {
   }
   fs.rmSync(to, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(to), { recursive: true });
-  fs.cpSync(from, to, { recursive: true });
+  fs.cpSync(from, to, { recursive: true, filter: (src) => !SKIP_NAMES.has(path.basename(src)) });
   console.log(`copy     ${to}`);
 }
 
@@ -94,6 +97,15 @@ if (!changed) {
   console.log(`write    ${profileFile}`);
 }
 
+// `exports` values may be a string, an array, or a conditions object
+// (`{".": {"types": "./x.d.mts", "default": "./x.mjs"}}`). Flatten to path strings.
+function exportTargets(value) {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.flatMap(exportTargets);
+  if (value && typeof value === 'object') return Object.values(value).flatMap(exportTargets);
+  return [];
+}
+
 // Verify the shipped copy is loadable: its declared exports must resolve.
 const shippedManifest = path.join(moduleDest, 'package.json');
 if (!dry) {
@@ -102,11 +114,13 @@ if (!dry) {
     process.exit(1);
   }
   const shipped = JSON.parse(fs.readFileSync(shippedManifest, 'utf8'));
-  for (const [key, rel] of Object.entries(shipped.exports ?? {})) {
-    if (rel.includes('*')) continue;
-    if (!fs.existsSync(path.join(moduleDest, rel))) {
-      console.error(`FAIL     export ${key} -> ${rel} does not exist`);
-      process.exit(1);
+  for (const [key, value] of Object.entries(shipped.exports ?? {})) {
+    for (const rel of exportTargets(value)) {
+      if (rel.includes('*')) continue;
+      if (!fs.existsSync(path.join(moduleDest, rel))) {
+        console.error(`FAIL     export ${key} -> ${rel} does not exist`);
+        process.exit(1);
+      }
     }
   }
   console.log(`ok       ${name}@${shipped.version} shipped and exports resolve`);

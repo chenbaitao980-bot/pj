@@ -1,5 +1,5 @@
 // Apply dsh-purge patches to the STAGED app copy only.
-import * as core from "file:///C:/Users/Administrator/.dsh/plugins/dsh-purge/lib/core.js";
+import * as core from "../dsh-purge/lib/core.js";
 
 const aiBase = process.env.DSH_BASE || String.raw`D:\dsh-freeze-build\payload\resources\app\dsh\node_modules\@deepseek-ai`;
 const backup = await core.backupAll(aiBase);

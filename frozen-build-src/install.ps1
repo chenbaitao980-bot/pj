@@ -26,6 +26,14 @@ try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop } catch { }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:LogPath = Join-Path $env:TEMP "dsh-frozen-install-$stamp.log"
 $script:Version = '0.2.2-rc.1'
+# 版本号以随包的 FROZEN-BUILD.json 为准，避免每次发版忘了改这里的硬编码。
+try {
+    $frozenManifest = Join-Path $PSScriptRoot 'FROZEN-BUILD.json'
+    if (Test-Path -LiteralPath $frozenManifest) {
+        $frozenInfo = (Get-Content -LiteralPath $frozenManifest -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+        if ($frozenInfo.version) { $script:Version = [string]$frozenInfo.version }
+    }
+} catch { }
 
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
@@ -165,6 +173,10 @@ try {
     Write-Log '写入 DSH_HOME（技能 / 插件 / profile / node_modules / 凭据）'
     & robocopy $homeTemplate $HomeDir /E /NFL /NDL /NJH /NJS /NP /R:1 /W:1 | Out-Null
     if ($LASTEXITCODE -ge 8) { Fail "写入 DSH_HOME 失败，robocopy exit=$LASTEXITCODE" }
+    # robocopy /E 不会清理目标里多出来的目录：旧包留下的 .git 要单独删。
+    foreach ($stale in @((Join-Path $HomeDir 'plugins\dsh-purge\.git'), (Join-Path $HomeDir 'profiles\desktop\node_modules\dsh-purge\.git'))) {
+        if (Test-Path -LiteralPath $stale) { & cmd.exe /c rmdir /s /q "$stale" | Out-Null }
+    }
 
     # ---------- 4.1 规范化 pnpm 元数据（随包 node_modules 写死了打包机路径，不修会让以后的 pnpm add 直接失败） ----------
     $nmDir = Join-Path $profileDir 'node_modules'
@@ -404,6 +416,25 @@ try {
             'Trellis 0.6.17'
         )
     }
+    # 插件清单从合并后的 profile bundles 生成，避免回执里写死一份过期列表。
+    $receiptPlugins = @()
+    try {
+        $profilePkgPath = Join-Path $HomeDir 'profiles\desktop\package.json'
+        if (Test-Path -LiteralPath $profilePkgPath) {
+            $profilePkg = (Get-Content -LiteralPath $profilePkgPath -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            $profileModules = Join-Path $HomeDir 'profiles\desktop\node_modules'
+            foreach ($bundle in @($profilePkg.dsh.profile.bundles)) {
+                if ([string]::IsNullOrWhiteSpace($bundle) -or $bundle -like '@deepseek-ai/*') { continue }
+                $bundleVersion = ''
+                $bundlePkg = Join-Path $profileModules (($bundle -replace '/', '\') + '\package.json')
+                if (Test-Path -LiteralPath $bundlePkg) {
+                    try { $bundleVersion = [string]((Get-Content -LiteralPath $bundlePkg -Raw -Encoding UTF8 | ConvertFrom-Json).version) } catch { }
+                }
+                $receiptPlugins += $(if ($bundleVersion) { "$bundle $bundleVersion" } else { $bundle })
+            }
+        }
+    } catch { }
+    $receipt.plugins = $receiptPlugins
     [IO.File]::WriteAllText((Join-Path $InstallDir 'install-receipt.json'), ($receipt | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 
     Write-Log '安装完成' 'OK'

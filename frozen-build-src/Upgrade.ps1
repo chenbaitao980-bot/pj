@@ -96,6 +96,25 @@ try {
     }
     if (Test-Path -LiteralPath $backupDir) { Log "旧配置已备份：$backupDir" }
 
+    # /*dsh:keep-user-plugins*/ 模板里的 profile 清单会被整份复制过去；先记下本机独有的依赖与 bundle，
+    # 复制后补回去，否则用户自己装的插件（如 dsh-computer-use-win）会凭空消失。
+    $profilePkgPath = Join-Path $HomeDir 'profiles\desktop\package.json'
+    $userDeps = @{}
+    $userBundles = @()
+    if (Test-Path -LiteralPath $profilePkgPath) {
+        try {
+            $prevPkg = (Get-Content -LiteralPath $profilePkgPath -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            if ($prevPkg.dependencies) {
+                foreach ($p in $prevPkg.dependencies.PSObject.Properties) { $userDeps[$p.Name] = [string]$p.Value }
+            }
+            if ($prevPkg.dsh -and $prevPkg.dsh.profile -and $prevPkg.dsh.profile.bundles) {
+                $userBundles = @($prevPkg.dsh.profile.bundles)
+            }
+        } catch {
+            Log ("读取旧 profile 清单失败，本机插件声明可能丢失：{0}" -f $_.Exception.Message) 'WARN'
+        }
+    }
+
     # ---------- 2. 热更新脚本与文档 ----------
     foreach ($name in @('install.ps1', 'Uninstall.ps1', 'Doctor.ps1', 'Repair-Plugins.ps1', 'Launch.ps1', 'Finalize-Update.ps1', 'Plugin-Scope.ps1', 'README-冻结版.md', 'FROZEN-BUILD.json')) {
         $src = Join-Path $SourceDir $name
@@ -123,6 +142,36 @@ try {
     $robocopyArgs += @((Join-Path $homeTemplate '.credentials.yaml'), (Join-Path $homeTemplate 'prompt-inject.md'))
     & robocopy @robocopyArgs | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "合并 DSH_HOME 失败，robocopy exit=$LASTEXITCODE" }
+    # 本机安装的插件声明：模板里没有的依赖 / bundle 补回去（插件文件本身不会被
+    # robocopy /E 删除，补回声明即可继续加载）。
+    if (($userDeps.Count -gt 0 -or $userBundles.Count -gt 0) -and (Test-Path -LiteralPath $profilePkgPath)) {
+        try {
+            $mergedPkg = (Get-Content -LiteralPath $profilePkgPath -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            if (-not $mergedPkg.dependencies) {
+                $mergedPkg | Add-Member -NotePropertyName dependencies -NotePropertyValue (New-Object psobject)
+            }
+            foreach ($name in $userDeps.Keys) {
+                if (@($mergedPkg.dependencies.PSObject.Properties.Name) -notcontains $name) {
+                    $mergedPkg.dependencies | Add-Member -NotePropertyName $name -NotePropertyValue $userDeps[$name]
+                }
+            }
+            if (-not $mergedPkg.dsh) { $mergedPkg | Add-Member -NotePropertyName dsh -NotePropertyValue (New-Object psobject) }
+            if (-not $mergedPkg.dsh.profile) { $mergedPkg.dsh | Add-Member -NotePropertyName profile -NotePropertyValue (New-Object psobject) }
+            if (-not $mergedPkg.dsh.profile.bundles) { $mergedPkg.dsh.profile | Add-Member -NotePropertyName bundles -NotePropertyValue @() }
+            foreach ($bundle in $userBundles) {
+                if ($mergedPkg.dsh.profile.bundles -notcontains $bundle) { $mergedPkg.dsh.profile.bundles += $bundle }
+            }
+            [IO.File]::WriteAllText($profilePkgPath, ($mergedPkg | ConvertTo-Json -Depth 12), (New-Object Text.UTF8Encoding($false)))
+            Log ("已保留本机插件声明：{0} 个依赖 / {1} 个 bundle" -f $userDeps.Count, $userBundles.Count) 'OK'
+        } catch {
+            Log ("保留本机插件声明失败：{0}" -f $_.Exception.Message) 'WARN'
+        }
+    }
+
+    # robocopy /E 不删除目标里多出来的目录：旧包复制进去的 .git 单独清理。
+    foreach ($stale in @((Join-Path $HomeDir 'plugins\dsh-purge\.git'), (Join-Path $HomeDir 'profiles\desktop\node_modules\dsh-purge\.git'))) {
+        if (Test-Path -LiteralPath $stale) { & cmd.exe /c rmdir /s /q "$stale" | Out-Null }
+    }
 
     # pnpm 元数据按本机路径重写（随包 node_modules 写死了打包机路径）
     $nmDir = Join-Path $HomeDir 'profiles\desktop\node_modules'
@@ -212,10 +261,25 @@ try {
     $srcExe = Join-Path $SourceDir 'DeepSeek Harness.exe'
 
     if ($running -gt 0) {
+        # 先完整拷到 app.staging-*，再原子改名成 app.next：Launch.ps1 / 守候进程
+        # 任何时刻看到的 app.next 都是完整树，半成品不会换进运行目录。
+        $stagingApp = Join-Path $InstallDir "resources\app.staging-$stamp"
+        Get-ChildItem -LiteralPath (Join-Path $InstallDir 'resources') -Directory -Filter 'app.staging-*' -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Tree $_.FullName }
+        Remove-Tree $stagingApp
+        Log '把新 resources\app 拷到 staging（完成后原子改名为 app.next）…'
+        [void](Copy-Tree $srcApp $stagingApp)
+        if (-not (Test-Path -LiteralPath (Join-Path $stagingApp 'package.json'))) {
+            Log 'staging 不完整（缺 package.json），放弃本次 stage。' 'ERROR'
+            Remove-Tree $stagingApp
+            exit 1
+        }
         Remove-Tree $newApp
-        Log '把新 resources\app 放到 app.next（下次启动由 Launch.ps1 原子替换）…'
-        [void](Copy-Tree $srcApp $newApp)
-        if (Test-Path -LiteralPath $srcExe) { Copy-Item -LiteralPath $srcExe -Destination $newExe -Force }
+        Move-Item -LiteralPath $stagingApp -Destination $newApp -Force
+        if (Test-Path -LiteralPath $srcExe) {
+            Copy-Item -LiteralPath $srcExe -Destination "$newExe.tmp" -Force
+            Move-Item -LiteralPath "$newExe.tmp" -Destination $newExe -Force
+        }
         $pending = [ordered]@{
             stagedAt = (Get-Date).ToString('o')
             appNext  = 'resources\app.next'
@@ -244,12 +308,23 @@ try {
             Log '缺少 Finalize-Update.ps1，替换只能靠下次用快捷方式启动时由 Launch.ps1 完成' 'WARN'
         }
     } else {
+        # 宿主未运行：同样先拷到 staging 并校验，再整树换入，避免拷到一半留下坏 app。
+        $stagingApp = Join-Path $InstallDir "resources\app.staging-$stamp"
+        Remove-Tree $stagingApp
+        Log '宿主未运行，先拷到 staging 再整树替换…'
+        [void](Copy-Tree $srcApp $stagingApp)
+        if (-not (Test-Path -LiteralPath (Join-Path $stagingApp 'package.json'))) {
+            Log 'staging 不完整（缺 package.json），放弃替换。' 'ERROR'
+            Remove-Tree $stagingApp
+            exit 1
+        }
         $oldApp = Join-Path $InstallDir "resources\app.old-$stamp"
         if (Test-Path -LiteralPath (Join-Path $InstallDir 'resources\app')) { Move-Item -LiteralPath (Join-Path $InstallDir 'resources\app') -Destination $oldApp -Force }
-        [void](Copy-Tree $srcApp (Join-Path $InstallDir 'resources\app'))
+        Move-Item -LiteralPath $stagingApp -Destination (Join-Path $InstallDir 'resources\app') -Force
         if (Test-Path -LiteralPath $srcExe) {
             if (Test-Path -LiteralPath (Join-Path $InstallDir 'DeepSeek Harness.exe')) { Move-Item -LiteralPath (Join-Path $InstallDir 'DeepSeek Harness.exe') -Destination (Join-Path $InstallDir "DeepSeek Harness.exe.old-$stamp") -Force }
-            Copy-Item -LiteralPath $srcExe -Destination (Join-Path $InstallDir 'DeepSeek Harness.exe') -Force
+            Copy-Item -LiteralPath $srcExe -Destination (Join-Path $InstallDir 'DeepSeek Harness.exe.tmp') -Force
+            Move-Item -LiteralPath (Join-Path $InstallDir 'DeepSeek Harness.exe.tmp') -Destination (Join-Path $InstallDir 'DeepSeek Harness.exe') -Force
         }
         Log 'resources\app 与宿主已直接替换' 'OK'
     }
@@ -275,22 +350,51 @@ try {
     }
 
     # ---------- 8. 回执 ----------
+    # 版本号与插件清单都从本次升级源 / 合并后的 profile 读，避免硬编码过期。
+    $receiptVersion = '0.2.2-rc.1'
+    try {
+        $sourceManifest = Join-Path $SourceDir 'FROZEN-BUILD.json'
+        if (Test-Path -LiteralPath $sourceManifest) {
+            $sourceInfo = (Get-Content -LiteralPath $sourceManifest -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            if ($sourceInfo.version) { $receiptVersion = [string]$sourceInfo.version }
+        }
+    } catch { }
+    $receiptPlugins = @()
+    try {
+        $profilePkgPath = Join-Path $HomeDir 'profiles\desktop\package.json'
+        if (Test-Path -LiteralPath $profilePkgPath) {
+            $profilePkg = (Get-Content -LiteralPath $profilePkgPath -Raw -Encoding UTF8).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            $profileModules = Join-Path $HomeDir 'profiles\desktop\node_modules'
+            foreach ($bundle in @($profilePkg.dsh.profile.bundles)) {
+                if ([string]::IsNullOrWhiteSpace($bundle) -or $bundle -like '@deepseek-ai/*') { continue }
+                $bundleVersion = ''
+                $bundlePkg = Join-Path $profileModules (($bundle -replace '/', '\') + '\package.json')
+                if (Test-Path -LiteralPath $bundlePkg) {
+                    try { $bundleVersion = [string]((Get-Content -LiteralPath $bundlePkg -Raw -Encoding UTF8 | ConvertFrom-Json).version) } catch { }
+                }
+                $receiptPlugins += $(if ($bundleVersion) { "$bundle $bundleVersion" } else { $bundle })
+            }
+        }
+    } catch { }
+    if ($receiptPlugins.Count -eq 0) {
+        $receiptPlugins = @('dsh-purge 1.1.90', 'dsh-artex 0.2.0', '@xiaoso/dsh-workflow-lite', 'dsh-tool-websearch 0.1.1', 'dsh-skill-trellis 2.0.0', 'dsh-skill-grill-me', 'dsh-skill-officecli', 'dsh-skill-darwin', 'dsh-mcp-gitnexus 1.0.0', 'dsh-mcp-codegraph 1.0.0')
+    }
     $receiptPath = Join-Path $InstallDir 'install-receipt.json'
     $receipt = [ordered]@{
         installedAt = (Get-Date).ToString('o')
         installDir  = $InstallDir
         dshHome     = $HomeDir
-        version     = '0.2.2-rc.1'
+        version     = $receiptVersion
         frozen      = $true
         mode        = $(if ($running -gt 0) { 'staged (app.next，下次启动生效)' } else { 'in-place' })
         updater     = 'disabled (app-update.yml removed + main.js enabled=false)'
         node        = $node
-        plugins     = @('dsh-purge 1.1.90', 'dsh-artex 0.2.0', '@xiaoso/dsh-workflow-lite', 'dsh-tool-websearch 0.1.1', 'dsh-skill-trellis 2.0.0', 'dsh-skill-grill-me', 'dsh-skill-officecli', 'dsh-skill-darwin', 'dsh-mcp-gitnexus 1.0.0', 'dsh-mcp-codegraph 1.0.0')
+        plugins     = $receiptPlugins
     }
     [IO.File]::WriteAllText($receiptPath, ($receipt | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
 
     Log '升级完成' 'OK'
-    if ($running -gt 0) { Log '当前实例继续用旧代码运行；关闭后重新双击快捷方式即切到 0.2.2-rc.1。' 'OK' }
+    if ($running -gt 0) { Log ("当前实例继续用旧代码运行；关闭后重新双击快捷方式即切到 {0}。" -f $receiptVersion) 'OK' }
     Log "日志：$log"
     exit 0
 }
