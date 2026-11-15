@@ -1,0 +1,231 @@
+<p align="center">
+  <img src="assets/readme/hero.webp" alt="dsh-oil-ui — 把 DeepSeek 的 UI 设计能力，推到极限。" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://ui.oiloil.org">作品画廊</a> ·
+  <a href="https://ui.oiloil.org/pro/">Oil UI Pro</a> ·
+  <a href="https://github.com/oil-oil/oil-ui">上游 oil-ui</a> ·
+  <a href="#安装">安装</a> ·
+  <a href="#原生工具与快捷命令">原生工具</a> ·
+  <a href="README.en.md">English</a>
+</p>
+
+---
+
+**`dsh-oil-ui` 是 [oil-ui](https://github.com/oil-oil/oil-ui) 的 DeepSeek Harness 原生插件。**
+
+国内 AtomGit 托管：[dsh-oil-ui](https://atomgit.com/oil-oil/dsh-oil-ui)，自动同步 GitHub 仓库。
+
+它把 `oil-ui` 的界面设计流程直接接进 `@deepseek-ai/dsh`：先在同屏对比页里摆开 3 个真正拉开差距的方向，挑定后再在当前目录里写代码、截真图、点交互、查多端，照着真实画面一轮轮把界面改到位。
+
+关于设计方法与作品画廊，可直接看 **[oil-ui 仓库](https://github.com/oil-oil/oil-ui)** 和 **[ui.oiloil.org](https://ui.oiloil.org)**。这里重点说明 `dsh-oil-ui` 在 DeepSeek Harness 里做了什么，以及怎样配合 **Oil UI Pro** 使用。
+
+<p align="center">
+  <img src="assets/readme/showcase.webp" alt="DeepSeek Harness + dsh-oil-ui 实跑作品" width="100%">
+</p>
+
+上图 6 件作品（`ARCHON`、`Sonar 声场`、`Tempo 2026`、`Atelier Volders`、`Fonderie Mercier`、`Vesper`）均由 `DeepSeek 4.1 Flash` 搭配 `dsh-oil-ui`，仅凭一段简短任务描述在隔离目录里自主探索、生成对比页并完成全部交互与多端校验。
+
+---
+
+## 为什么做原生插件
+
+DeepSeek Harness 本身已经有文件读写（`read` / `write` / `edit`）、终端（`bash`）、看图（`read_image`）和子代理（`subagent`）。如果再包一层项目沙箱或过渡 `ADAPTER`，模型反而要在两套读写工具和两套目录规则之间来回猜。
+
+`dsh-oil-ui` 直接按 DeepSeek Harness 的原生插件机制设计：
+
+- **直接在当前工作目录读写**：不创建额外的 `projects/<uuid>` 嵌套目录，页面、样式、脚本和截图都落在当前目录，和原生 `read` / `write` / `read_image` 完全一致。
+- **只注册 `oil-ui` 独有的 5 个工具**：对比页打包、浏览器截图与交互巡检、公有领域素材检索、AI 生图修图，以及 Skill 状态检查。
+- **原样内置公开 Skill**：只从已发布的公开 `oil-ui` 同步，正文和资源保持原始字节，不作宿主转换。宿主工具用法放在系统提示、工具说明和共享的 `references/tools.md` 宿主一节。
+
+---
+
+## 在 DeepSeek Harness 里怎么跑
+
+给一句简单的需求，Agent 会自己走完 **探索方向 → 生成同屏对比页 → 实现完整页面 → 截图与子代理走查**：
+
+<p align="center">
+  <img src="assets/readme/proof-tempo.webp" alt="Tempo 2026 移动端三方向同屏对比页" width="100%">
+</p>
+
+<p align="center">
+  <img src="assets/readme/proof-archon.webp" alt="ARCHON 桌面端三方向同屏对比页" width="100%">
+</p>
+
+1. 先调 `oil_ui_skill_status` 检查模型实际可见的 Skill。`skillReady=true` 时用原生 skill 工具加载 `activeSkillName`；无论内置 Lite、独立安装的 Lite 还是 Pro，都使用原文。异常时读取 `skillLoadWarning`。
+2. 在 `explore/` 下写出 3 个构图、色调和视觉引擎完全不同的首屏候选，调 `oil_ui_explorer` 打包出单文件 `style-explorer.html`。
+3. 选定方向后写出完整的 `index.html`（或多屏 `screens.html`），调 `oil_ui_shoot` 在真实无头浏览器里截图、模拟点击与输入、检查多端断点，并用原生 `read_image` 看图改到干净为止。
+
+---
+
+## 原生工具与快捷命令
+
+插件向模型暴露 5 个专用工具，参数全部以当前工作目录（`cwd`）为基准：
+
+| 工具                  | 作用                                                                                                                                                                                                                                                                                                 |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oil_ui_skill_status` | 刷新 Skill 状态，返回当前生效的 `activeSkillName`、生图来源与 oiloil 余额，同时处理版本更新检查                                                                                                                                                                                                      |
+| `oil_ui_explorer`     | 读取 `explore/manifest.json`（兼容常见简写字段），把多个首屏候选内联打包成可交互的 `style-explorer.html` 对比页                                                                                                                                                                                      |
+| `oil_ui_shoot`        | 在真实浏览器里打开本地页面或 URL：支持指定视口尺寸、2x 特写、多状态连拍（`states`）、交互步骤脚本（`steps`）、动效序列图（`frames`）、按需录屏（`record` / `motion`）以及按共有元素同比例拼图（`stitch` 项的 `matchWidth` / `scale`、全局 `crop`），并自动检查控制台报错、横向溢出、断图与文字对比度 |
+| `oil_ui_media`        | 搜索、预览和下载免版权/公有领域图片、博物馆馆藏（Met、AIC、Cleveland、Wikimedia、Openverse 等）、视频与地图素材                                                                                                                                                                                      |
+| `oil_ui_image`        | 优先调用本地 `image-gen`；本机不可用时使用 oiloil 生成或编辑图片，支持指定分辨率；oiloil 返回格式不同时按实际格式保存并返回路径                                                                                                                                                                      |
+
+同时向聊天输入框注册 3 个以 `oil-ui-` 为前缀的 Slash 快捷命令（与其他 `oil-*` 系列 Skill 区分）：
+
+| 命令                              | 作用                                                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `/oil-ui-status [update]`         | 直接查看当前生效版本（`oil-ui` / `oil-ui-pro`）、更新状态与 `image-gen` 状态；带 `update` 时更新 filesystem 安装版；内置版提示更新插件 |
+| `/oil-ui-explore <需求描述>`      | 支持附带参考图/文件，直接发起三方向探索并生成 `style-explorer.html` 对比页                                                             |
+| `/oil-ui-review [目标页面或文件]` | 支持附带截图/文件，对目标页面抓真图并执行视觉层级 + 可用性双轨走查                                                                     |
+
+---
+
+## Oil UI Pro 与更新检查
+
+`dsh-oil-ui` 内置免费版 `oil-ui`，开箱就能跑通方向探索与同屏对比页。如果你经常做正式上线页、复杂工作台或需要多轮视觉精修，可以搭配 **[Oil UI Pro](https://ui.oiloil.org/pro/)** 使用。
+
+### Oil UI Pro 多了什么
+
+| 能力                                                                              | `oil-ui`（内置免费版） |            `Oil UI Pro`            |
+| --------------------------------------------------------------------------------- | :--------------------: | :--------------------------------: |
+| 设计方向探索 + `style-explorer.html` 同屏对比                                     |           ✓            |                 ✓                  |
+| 真实截图驱动的多轮视觉精修与对比度/排版巡检                                       |           —            |                 ✓                  |
+| 多状态连拍（`states`）、交互步骤（`steps`）与录屏抽帧                             |           —            |                 ✓                  |
+| 博物馆/公有领域素材检索（`oil_ui_media`）与 AI 生图修图（`oil_ui_image`）完整分册 |           —            |                 ✓                  |
+| 独立视觉与 UX 走查                                                                |  主要流程轻量 UX 走查  | 自主风险探针、深入洞察与同路径复核 |
+| 完整场景分册（营销落地页、数据后台、移动多屏、重绘改版、字体子集化）              |           —            |                 ✓                  |
+
+### Pro 发现与实际加载诊断
+
+每次查询状态时，插件重新发现本机 `oil-ui-pro`：先检查显式配置及 DSH 的项目、用户 Skill 目录（包括 `~/.dsh/skills` 和 `~/.agents/skills`），再检查 oil-cli 支持的用户安装位置：`~/.claude/skills`、`$CODEX_HOME/skills`（未设置时为 `~/.codex/skills`）、`~/.cursor/skills`、`~/.workbuddy/skills`。每处只检查 `oil-ui-pro`，不会递归扫描其他目录；这些跨宿主回退位置不用于发现 image-gen。自定义安装位置用 `proSkillDir` 或 `OIL_UI_PRO_DIR` 指定。该列表依据 [oil-cli 的 installationRoots/targetRoot](https://github.com/oil-oil/oil-cli/blob/e6ee580c01e854919ee50ef1f3de6876c3c52c18/src/skills.js#L139)；默认安装优先已存在的 Claude 目录，Codex 和 DSH 通常共享 `.agents/skills`。
+
+**Lite 与 Pro 原文都直接可用；Pro 由 Harness filesystem Provider 唯一发布。** 插件只发布内置 `oil-ui`，在 Host、preset、Agent 任何层都不注册同名 Pro，也不读取私有适配规则、不改写 Pro 或生成 Pro 缓存。Pro 的 `references/tools.md` 宿主一节说明如何使用 `oil_ui_shoot`、`oil_ui_media`、`oil_ui_image`、`oil_ui_explorer`；参数对应工具同名字段，版本和生图来源以宿主状态工具为准。新版宿主说明随 Pro `0.33.1` 交付。
+
+状态读取当前 Agent 作用域实际胜出的定义，与它自己的资源目录里的原始正文比对，同时核对入口路径、版本及模型调用权限。独立安装的 Lite 即使版本与内置版不同，只要原文一致也正常。正常原文返回 `skillReady=true`、`nativeSkillReady=true`、`visibleMatchesOriginal=true` 和 `skillLoadState=ready`；错误覆盖为 `overridden`，缺少发布或禁止模型调用为 `unavailable`。`nativeSkillReady` 是兼容别名，不表示发生过转换。`/oil-ui-status` 和 `upgradeHint` 同样呈现实际结果；旧 `proAdapterReady` 字段已移除。
+
+跨宿主发现与 `proSkillDir` 只用于本地诊断，不会发布 Pro。若 Pro 仅在 Claude 等目录，需安装到 Harness 可见的目录（例如 `~/.agents/skills` 或 `~/.dsh/skills`）。最终决定与回归契约见 [唯一发布者说明](docs/pro-single-publisher.md)。
+
+### 版本检查与一键更新
+
+`oil_ui_skill_status` 直接内置版本更新检查：
+
+- **版本检查与一键更新**：调用 `oil_ui_skill_status` 时，插件通常每 10 分钟最多向 `https://ui.oiloil.org/api/store/versions` 核对一次版本号，结果缓存在 `~/.local/state/oil/<name>-update.json`。请求最多等待 8 秒；失败后自动退避，显式更新或发现本地版本高于缓存时会提前检查。发现新版本时会在返回结果里附上 `updateNotice`；传入 `{"update": true}`（或执行 `/oil-ui-status update`）时，只对 filesystem 安装的 Lite/Pro 通过固定提交的 oil-cli 更新；内置 Lite 只提示更新插件，绝不改插件安装目录。
+
+---
+
+## 安装
+
+插件声明的 DSH 兼容范围为 `>=0.2.1-rc.2 <0.3.0-0`；这不是对未来所有预发布版的运行保证。Node 版本同时受 DSH 约束：DSH `0.2.1-rc.3/rc.5` 已在 Node `22.19.0` 验证，DSH `0.2.2-rc.1` 自身要求 Node `>=24.9.0`。Desktop 使用自带运行时，无需替换系统 Node。真实安装范围和已知问题见[安装验证报告](docs/real-install-verification.md)。
+
+- **DSH Desktop（官方桌面客户端）**：直接在桌面端 **「设置 → 插件 → 添加插件」** 中输入 `github:oil-oil/dsh-oil-ui`（国内网络输入 `git+https://atomgit.com/oil-oil/dsh-oil-ui.git`）安装。桌面端使用独立的 `DSH_HOME`：macOS 0.12.1 位于 `~/Library/Application Support/dsh-desktop/harness`，插件实际装入其中的 `profiles/web`，并不使用终端的 `~/.dsh/profiles/web`。请勿在终端执行 `--profile desktop`。
+- **旧版（如 `v0.3.1` ~ `v0.4.8`）升级或提示「与 DSH 0.2.2-rc.1 不兼容，请卸载后重新安装」**：早期版本在本地包内写死了旧版 `engines.dsh`，且 Git 插件再次直接添加会提示「已安装」而不会覆盖旧锁文件。请**先卸载旧版，再重新安装**：
+  - 桌面端 / Web 界面：在 **「设置 → 插件 → 已安装」** 中找到 `dsh-oil-ui`（异常），先点 **「卸载 / 移除」**，再点 **「添加插件」** 输入 `github:oil-oil/dsh-oil-ui`（或 `git+https://atomgit.com/oil-oil/dsh-oil-ui.git`）。
+  - 终端命令行（`dsh web`）：先执行 `npm exec --yes --package=pnpm@10.16.1 -- dsh plugin --profile web remove dsh-oil-ui`，再执行下方安装命令。
+
+### 1. 一行命令安装到 DeepSeek Harness
+
+如果你使用 `web` profile 的 DeepSeek Harness Web 界面，在终端运行：
+
+```bash
+npm exec --yes --package=pnpm@10.16.1 -- dsh plugin --profile web add github:oil-oil/dsh-oil-ui
+```
+
+AtomGit 镜像也可安装，但可能落后于 GitHub；安装后核对插件版本，不要把镜像 main 当成最新 Release：
+
+```bash
+npm exec --yes --package=pnpm@10.16.1 -- dsh plugin --profile web add git+https://atomgit.com/oil-oil/dsh-oil-ui.git
+```
+
+若使用命令行无头模式，将 `--profile web` 换成 `--profile headless`。需要可复现安装时，用完整 commit 锁定快照，例如 `github:oil-oil/dsh-oil-ui#6ad4be02be7464288cf8aff431f71b74455e8a4b`；请把它替换成你实际要安装的 Release commit，不要只依赖移动的分支名。
+
+以上命令用 npm 临时提供固定的 pnpm，不要求预装 pnpm，也不改变全局 Corepack。已确认 Corepack 在新目录可能选择入口缺失的 pnpm `12.18.0`；若见 `Cannot find module .../pnpm/12.18.0/bin/pnpm.cjs`，这是安装器启动失败，不要按 DSH 的泛化提示授权构建或修改其源码。固定 pnpm 后重试即可；本插件没有安装期构建脚本。
+
+需要正式快照时，从 [Releases](https://github.com/oil-oil/dsh-oil-ui/releases) 下载 `.tgz`，再执行 `npm exec --yes --package=pnpm@10.16.1 -- dsh plugin --profile web add ./dsh-oil-ui-X.Y.Z.tgz`。
+
+仓库已包含预编译好的 `lib/index.js` 和内置的免费版 `oil-ui`，安装后无需额外构建授权。重启对应 profile 后调用 `oil_ui_skill_status`，再加载返回的 Skill；安装命令退出 0、Host 可启动，都不能单独证明插件加载无误。`0.4.11` 的 `agents` 注入错误已在 `0.4.12` 修复；还在用 0.4.11 的用户请卸载后重装最新版。
+
+<details>
+<summary>从本地源码打包安装</summary>
+
+```bash
+git clone https://github.com/oil-oil/dsh-oil-ui.git
+cd dsh-oil-ui
+npm exec --yes --package=pnpm@10.16.1 -- pnpm install --frozen-lockfile
+npm exec --yes --package=pnpm@10.16.1 -- pnpm pack:plugin .work/dsh-oil-ui.tgz
+npm exec --yes --package=pnpm@10.16.1 -- dsh plugin --profile web add ./.work/dsh-oil-ui.tgz
+```
+
+</details>
+
+### 安装失败或装完没有生效
+
+先在同一个终端确认 `node --version`、`dsh --version`，并记下实际使用的 profile。安装和重启必须指向同一 profile；Desktop 与终端使用不同的数据目录。不要删除整个 profile 来排错。
+
+| 现象 / 原始错误                                                          | 处理                                                                                                                                                                  |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm was not found`；`Cannot find module .../pnpm/12.18.0/bin/pnpm.cjs` | 重跑上面的 `npm exec --yes --package=pnpm@10.16.1 -- dsh ...`。安装、卸载、源码打包都使用这个入口；不必改全局 Corepack。                                              |
+| `Unsupported engine` / `EBADENGINE`                                      | 核对报错属于哪个包。DSH 0.2.2-rc.1 要求 Node >=24.9.0；切换到相容的运行时后重试。                                                                                     |
+| `skipping profile bundle` / `incompatible with dsh`                      | 核对提示中的包名及实际插件版本；可能是其他旧插件。升级到相容版本；不要用 `allow-version --accept-risk` 绕过检查。                                                     |
+| `missing peer @deepseek-ai/*`                                            | profile 安装时可能出现宿主提供依赖的 peer 告警。它本身不等于加载失败；以重启后无插件加载错误、五工具和实际 Skill 状态为准。不要盲目往 profile 补装另一套 DSH/Cordis。 |
+| 提示已安装，但仍加载旧版                                                 | 在相同 profile 先 remove，再用目标 Release commit 或正式 `.tgz` add；仅重复 add Git 地址不会替换旧锁文件。                                                            |
+| `cannot get property "agents" without inject`                            | 0.4.11 的缺陷，已在 0.4.12 修复；卸载后重装最新版。重启、授权构建或更换模型不能修复它。                                                                               |
+| `ENOENT` 指向插件的 Skill / references                                   | 保留缺失路径和已装版本，重新安装正式完整 `.tgz`；不要手工复制资源到 DSH 或修改安装目录。                                                                              |
+| 本地 `.tgz` 报 `ERR_PNPM_ENAMETOOLONG`                                   | 把包放到较短、同一物理路径下再安装；macOS 避免混用 `/var` 与 `/private/var`。                                                                                         |
+| 下载超时、HTTP 504、Git 连接失败                                         | 保留第一个网络错误后重试，必要时换 GitHub / AtomGit 或下载正式 `.tgz`。镜像可能延迟；网络失败不能靠授权插件构建解决。                                                 |
+
+重启后让 Agent 调用 `oil_ui_skill_status`：应为 `skillReady=true`，再用原生 `skill` 加载 `activeSkillName`。五个工具存在但有加载错误，也算失败。反馈问题时附上 OS、Node/DSH/插件版本、profile、完整安装命令和首个错误；日志分享前遮盖 Key、令牌、认证 URL 和个人路径。
+
+维护者可在源码仓库执行以下真实安装自检（会下载 DSH/pnpm；隔离 HOME/profile，不启动模型、不调付费服务）：
+
+```bash
+# Node >=24.9.0：最新受测 DSH
+npm run smoke:install
+# Node >=22.19.0：旧版 DSH
+npm run smoke:install -- --dsh-version 0.2.1-rc.5
+```
+
+Windows / Linux 的相同入口由 CI 执行，web 与 headless 均测试。CI 尚未通过的组合不能视为验证完成；边界和证据见[补充验证记录](docs/real-install-followup.md)。
+
+### 2. 可选配置与运行依赖
+
+插件开箱即用，默认会自动扫描本机的 `oil-ui-pro` 和 `image-gen` Skill。如需自定义路径或端口，可在 `~/.dsh/cordis.patch.yml`（全局）或 `~/.dsh/profiles/web/cordis.patch.yml`（当前 profile）中按行覆盖配置（对应 [`src/config.ts`](src/config.ts)）：
+
+```yaml
+- id: dsh-oil-ui
+  name: dsh-oil-ui
+  config:
+    # 本地发现/工作区资源优先 Pro（默认 true）；不会禁用 filesystem 发布
+    bundledSkill: true # 设为 false 时只提供工具，由 filesystem 发布 Skill
+    preferPro: true
+    # 可选：指定 Pro 对照源目录（默认先扫描 DSH 根，再扫描已核对的 oil-cli 安装位置）
+    # proSkillDir: /Users/you/.agents/skills/oil-ui-pro
+    # 可选：指定 image-gen 脚本路径（默认自动扫描 ~/.dsh/skills/image-gen 与 ~/.agents/skills/image-gen）
+    # imageGenScript: /Users/you/.agents/skills/image-gen/scripts/image_gen.py
+    # 可选：覆盖默认工作目录与本地截图预览服务端口（0 为自动分配空闲端口）
+    # workspaceRoot: /path/to/workspace
+    # previewPort: 0
+```
+
+- **浏览器截图（`oil_ui_shoot`）**：使用本机安装的 Chrome / Chromium（或 Playwright Chromium）；若使用录屏抽帧（`record` / `motion`），需本机装有 `ffmpeg`。
+- **AI 生图修图（`oil_ui_image`）**：优先使用本机 `image-gen`（需 `python3`）；不可用时读取 `OIL_TOKEN` 或 `~/.config/oil/config.json` 的登录状态调用 oiloil。可用 `OIL_API` 覆盖 API 地址，默认 `https://api.oiloil.org`。
+
+---
+
+## 从上游 `oil-ui` 同步更新
+
+当上游 `oil-ui` 更新了 `SKILL.md`、分册或脚本时，在仓库根目录运行：
+
+```bash
+OIL_UI_SOURCE_DIR=../oil-ui pnpm sync:skill
+pnpm check
+pnpm pack:plugin .work/dsh-oil-ui.tgz
+```
+
+维护规则见[开发指南](docs/development.md)、[版本与来源](docs/versioning.md)和[发布流程](docs/releasing.md)。
+
+---
+
+## 许可
+
+基于 [MIT License](LICENSE) 开源。

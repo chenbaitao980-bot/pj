@@ -1,0 +1,2999 @@
+import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import "@deepseek-ai/dsh-skill";
+import "@deepseek-ai/dsh-system-prompt";
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import { parse } from "yaml";
+import { createHash, randomUUID } from "node:crypto";
+import Schema from "@deepseek-ai/schemastery";
+import { pipeline } from "node:stream/promises";
+import { createServer } from "node:http";
+import { parse as parse$1, serialize } from "parse5";
+import postcss from "postcss";
+import valueParser from "postcss-value-parser";
+import { parse as parse$2 } from "acorn";
+import { defineTool } from "@deepseek-ai/dsh-tools";
+//#region src/oil-api.ts
+const DEFAULT_API = "https://api.oiloil.org";
+var OilApiError = class extends Error {
+	status;
+	code;
+	constructor(status, code, message) {
+		super(message);
+		this.status = status;
+		this.code = code;
+		this.name = "OilApiError";
+	}
+};
+/** Match oil CLI and the bundled image script on each platform. */
+function oilTokenConfigPath(env = process.env, platform = process.platform, home = homedir()) {
+	const paths = platform === "win32" ? win32 : posix;
+	const root = platform === "win32" ? env.APPDATA || paths.join(home, "AppData", "Roaming") : env.XDG_CONFIG_HOME || paths.join(home, ".config");
+	return paths.join(root, "oil", "config.json");
+}
+/** Uses the same login token as oil CLI; the config `api` field is intentionally ignored. */
+async function readOilToken() {
+	const envToken = process.env.OIL_TOKEN?.trim();
+	if (envToken) return envToken;
+	try {
+		const raw = await readFile(oilTokenConfigPath(), "utf8");
+		const config = JSON.parse(raw);
+		if (!config || typeof config !== "object" || Array.isArray(config)) return null;
+		const token = config.token;
+		return typeof token === "string" && token.trim() ? token.trim() : null;
+	} catch {
+		return null;
+	}
+}
+function oilApiRoot() {
+	return (process.env.OIL_API?.trim() || DEFAULT_API).replace(/\/+$/, "");
+}
+async function requestOilApi(path, options = {}) {
+	const token = options.token ?? await readOilToken();
+	if (!token) throw new OilApiError(401, "not_logged_in", "尚未登录 oiloil。");
+	const headers = { Authorization: `Bearer ${token}` };
+	if (options.body !== void 0) headers["Content-Type"] = "application/json";
+	if (options.idempotencyKey) headers["Idempotency-Key"] = randomUUID();
+	const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? (options.method === "POST" ? 12e4 : 1e4));
+	const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+	const response = await fetch(`${oilApiRoot()}/v1${path}`, {
+		method: options.method ?? "GET",
+		headers,
+		...options.body !== void 0 ? { body: JSON.stringify(options.body) } : {},
+		signal
+	});
+	let payload;
+	try {
+		payload = await response.json();
+	} catch {
+		payload = null;
+	}
+	if (!response.ok) {
+		const error = payload && typeof payload === "object" && !Array.isArray(payload) ? payload.error : void 0;
+		throw new OilApiError(response.status, typeof error?.code === "string" ? error.code : "api_error", typeof error?.message === "string" ? error.message : `Oil API request failed (${response.status}).`);
+	}
+	if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Oil API returned an invalid JSON response.");
+	return payload;
+}
+async function readOilCredits(token) {
+	const result = await requestOilApi("/credits", { token });
+	if (typeof result.balance !== "number" || !Number.isFinite(result.balance)) throw new Error("Oil API returned an invalid credits balance.");
+	return result.balance;
+}
+//#endregion
+//#region src/skill/install.ts
+const INSTALL_REPO = "github:oil-oil/oil-cli#e6ee580c01e854919ee50ef1f3de6876c3c52c18";
+//#endregion
+//#region src/skill/upstream.ts
+const execFileAsync = promisify(execFile);
+const VERSIONS_URL = "https://ui.oiloil.org/api/store/versions";
+const CHECK_INTERVAL_MS = 6e5;
+const FETCH_TIMEOUT_MS = 8e3;
+const packagedSkillDirectory = fileURLToPath(new URL("../skills/oil-ui", import.meta.url));
+const sourceSkillDirectory = fileURLToPath(new URL("../../skills/oil-ui", import.meta.url));
+const bundledSkillDirectory = existsSync(join(packagedSkillDirectory, "SKILL.md")) ? packagedSkillDirectory : sourceSkillDirectory;
+function dshSkillRoots(skillName, cwd) {
+	const home = homedir();
+	const dshHome = process.env.DSH_HOME?.trim();
+	const agentsHome = process.env.DSH_AGENTS_HOME?.trim();
+	let projectDir = cwd?.trim() ? resolve(cwd.trim()) : void 0;
+	if (projectDir) {
+		let ancestor = projectDir;
+		while (true) {
+			if (existsSync(join(ancestor, ".git"))) {
+				projectDir = ancestor;
+				break;
+			}
+			const parent = dirname(ancestor);
+			if (parent === ancestor) break;
+			ancestor = parent;
+		}
+	}
+	const roots = [
+		...projectDir ? [join(resolve(projectDir), ".dsh", "skills", skillName), join(resolve(projectDir), ".agents", "skills", skillName)] : [],
+		...dshHome ? [join(resolve(dshHome), "skills", skillName)] : [],
+		join(home, ".dsh", "skills", skillName),
+		...process.platform === "darwin" ? [join(home, "Library", "Application Support", "dsh-desktop", "harness", "skills", skillName)] : [],
+		...agentsHome ? [join(resolve(agentsHome), "skills", skillName)] : [],
+		join(home, ".agents", "skills", skillName)
+	];
+	return [...new Set(roots)];
+}
+function stateRootDir() {
+	return process.env.XDG_STATE_HOME?.trim() || join(homedir(), ".local", "state");
+}
+function parseSemverTuple(v) {
+	const parts = v.trim().replace(/^v/, "").split(".").map((part) => Number.parseInt(part, 10));
+	return [
+		parts[0] || 0,
+		parts[1] || 0,
+		parts[2] || 0
+	];
+}
+function isNewerVersion(latest, current) {
+	const [la, lb, lc] = parseSemverTuple(latest);
+	const [ca, cb, cc] = parseSemverTuple(current);
+	if (la !== ca) return la > ca;
+	if (lb !== cb) return lb > cb;
+	return lc > cc;
+}
+const updateCache = /* @__PURE__ */ new Map();
+const updateChecks = /* @__PURE__ */ new Map();
+async function checkSkillUpdate(active, currentVersion, performUpdate = false) {
+	if (process.env.OIL_NO_UPDATE_CHECK === "1" && !performUpdate) return {
+		latestVersion: null,
+		updateAvailable: false,
+		updated: false,
+		updateNotice: null,
+		lastError: null
+	};
+	const cachePath = join(stateRootDir(), "oil", `${active.name}-update.json`);
+	let cache = updateCache.get(cachePath);
+	if (!cache) {
+		try {
+			const raw = JSON.parse(await readFile(cachePath, "utf8"));
+			const rawAttemptedAt = Number(raw.attemptedAt ?? raw.checkedAt ?? raw.checked_at ?? 0);
+			const rawSucceededAt = Number(raw.succeededAt ?? (raw.checkedAt || raw.checked_at ? rawAttemptedAt : 0));
+			const rawFailures = Math.max(0, Number(raw.failures) || 0);
+			const rawLastError = typeof raw.lastError === "string" && raw.lastError.trim() ? raw.lastError.trim() : null;
+			const poisonedLegacyCache = rawSucceededAt === 0 && rawFailures > 0 && !("lastError" in raw);
+			cache = {
+				attemptedAt: poisonedLegacyCache ? 0 : rawAttemptedAt,
+				succeededAt: rawSucceededAt,
+				failures: poisonedLegacyCache ? 0 : rawFailures,
+				latest: typeof raw.latest === "string" ? raw.latest : null,
+				lastError: rawLastError
+			};
+		} catch {
+			cache = {
+				attemptedAt: 0,
+				succeededAt: 0,
+				failures: 0,
+				latest: null,
+				lastError: null
+			};
+		}
+		cache = updateCache.get(cachePath) ?? cache;
+		updateCache.set(cachePath, cache);
+	}
+	const nowMs = Date.now();
+	const interval = cache.failures ? Math.min(CHECK_INTERVAL_MS, 3e4 * 2 ** Math.min(cache.failures - 1, 5)) : CHECK_INTERVAL_MS;
+	const localOutpacedCache = Boolean(cache.latest && cache.failures === 0 && isNewerVersion(currentVersion, cache.latest));
+	if (performUpdate || localOutpacedCache || nowMs - cache.attemptedAt * 1e3 >= interval) {
+		let pending = updateChecks.get(cachePath);
+		if (!pending) {
+			const previous = cache;
+			pending = (async () => {
+				const next = {
+					...previous,
+					attemptedAt: Math.floor(nowMs / 1e3),
+					failures: previous.failures + 1
+				};
+				try {
+					const res = await fetch(VERSIONS_URL, {
+						headers: { "User-Agent": "oil-skill-update-check/1.0" },
+						signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+					});
+					if (res.ok) {
+						const entry = (await res.json())?.skills?.[active.name];
+						const version = typeof entry?.latest === "string" && entry.latest.trim() ? entry.latest : typeof entry?.version === "string" && entry.version.trim() ? entry.version : void 0;
+						if (typeof version === "string" && version.trim()) {
+							next.latest = version.trim();
+							next.succeededAt = next.attemptedAt;
+							next.failures = 0;
+							next.lastError = null;
+						} else next.lastError = `Missing latest version for ${active.name} in versions response`;
+					} else next.lastError = `HTTP ${res.status}`;
+				} catch (error) {
+					next.lastError = error instanceof Error ? error.message : String(error);
+				}
+				updateCache.set(cachePath, next);
+				try {
+					await mkdir(dirname(cachePath), {
+						recursive: true,
+						mode: 448
+					});
+					await writeFile(cachePath, JSON.stringify(next), {
+						encoding: "utf8",
+						mode: 384
+					});
+				} catch {}
+				return next;
+			})();
+			updateChecks.set(cachePath, pending);
+		}
+		try {
+			cache = await pending;
+		} finally {
+			if (updateChecks.get(cachePath) === pending) updateChecks.delete(cachePath);
+		}
+	}
+	const latest = cache.latest && isNewerVersion(currentVersion, cache.latest) ? currentVersion : cache.latest;
+	const lastError = cache.lastError;
+	if (!latest || !isNewerVersion(latest, currentVersion)) return {
+		latestVersion: latest,
+		updateAvailable: false,
+		updated: false,
+		updateNotice: null,
+		lastError
+	};
+	if (await isBundledSkillDirectory(active.directory)) return {
+		latestVersion: latest,
+		updateAvailable: true,
+		updated: false,
+		updateNotice: `[oil-ui] Update available: ${currentVersion} -> ${latest}. Update the dsh-oil-ui plugin to receive its bundled Skill; do not update files inside the plugin installation.`,
+		lastError
+	};
+	const targetDir = active.directory;
+	if (performUpdate) try {
+		const cmd = process.platform === "win32" ? "npx.cmd" : "npx";
+		await execFileAsync(cmd, [
+			"-y",
+			INSTALL_REPO,
+			"update",
+			active.name,
+			"--path",
+			targetDir,
+			"--json"
+		], { timeout: 9e4 });
+		return {
+			latestVersion: latest,
+			updateAvailable: false,
+			updated: true,
+			updateNotice: `[${active.name}] Updated to ${latest}. Reload the Skill to use the updated instructions.`,
+			lastError
+		};
+	} catch {
+		return {
+			latestVersion: latest,
+			updateAvailable: true,
+			updated: false,
+			updateNotice: `[${active.name}] Auto-update failed. Run manually: npx -y ${INSTALL_REPO} update ${active.name} --path "${targetDir}"`,
+			lastError
+		};
+	}
+	return {
+		latestVersion: latest,
+		updateAvailable: true,
+		updated: false,
+		updateNotice: `[${active.name}] Update available: ${currentVersion} -> ${latest}. Ask the user whether to update now; if confirmed, call oil_ui_skill_status({ "update": true }).`,
+		lastError
+	};
+}
+async function resolveImageGenScript(options = {}) {
+	const explicit = options.imageGenScript?.trim() || process.env.OIL_UI_IMAGE_GEN_SCRIPT?.trim();
+	const roots = dshSkillRoots("image-gen", options.cwd);
+	const candidates = [...explicit ? [{
+		path: resolve(explicit),
+		root: dirname(resolve(explicit))
+	}] : [], ...roots.map((root) => ({
+		root,
+		path: join(root, "scripts", "image_gen.py")
+	}))];
+	for (const candidate of candidates) try {
+		const root = await realpath(candidate.root);
+		const path = await realpath(candidate.path);
+		const rel = relative(root, path);
+		if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+		if ((await stat(path)).isFile()) return path;
+	} catch {}
+	return null;
+}
+function frontmatter(raw) {
+	const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw);
+	if (!match) throw new Error("Skill frontmatter missing");
+	const data = parse(match[1]);
+	if (!data || typeof data !== "object") throw new Error("Invalid Skill frontmatter");
+	return {
+		data,
+		content: raw.slice(match[0].length)
+	};
+}
+const headers = /* @__PURE__ */ new Map();
+async function readHeader(path) {
+	const info = await stat(path);
+	const stamp = `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+	const old = headers.get(path);
+	if (old?.stamp === stamp) return old.value;
+	const value = (async () => {
+		const handle = await open(path, "r");
+		try {
+			let raw = "";
+			const chunk = Buffer.alloc(1024);
+			const chunks = [];
+			for (let offset = 0; offset < 65536; offset += chunk.length) {
+				const { bytesRead } = await handle.read(chunk, 0, chunk.length, offset);
+				chunks.push(Buffer.from(chunk.subarray(0, bytesRead)));
+				raw = Buffer.concat(chunks).toString("utf8");
+				if (/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.test(raw) || !bytesRead) break;
+			}
+			return { data: frontmatter(raw).data };
+		} finally {
+			await handle.close();
+		}
+	})();
+	headers.set(path, {
+		stamp,
+		value
+	});
+	try {
+		return await value;
+	} catch (error) {
+		headers.delete(path);
+		throw error;
+	}
+}
+async function findPro(options) {
+	const explicit = options.proSkillDir?.trim() || process.env.OIL_UI_PRO_DIR?.trim();
+	const home = homedir();
+	const codexHome = process.env.CODEX_HOME?.trim();
+	const codexRoot = codexHome ? codexHome === "~" ? home : /^~[/\\]/.test(codexHome) ? join(home, codexHome.slice(2)) : resolve(codexHome) : join(home, ".codex");
+	const candidates = [
+		...explicit ? [explicit] : [],
+		...dshSkillRoots("oil-ui-pro", options.cwd),
+		join(home, ".claude", "skills", "oil-ui-pro"),
+		join(codexRoot, "skills", "oil-ui-pro"),
+		join(home, ".cursor", "skills", "oil-ui-pro"),
+		join(home, ".workbuddy", "skills", "oil-ui-pro")
+	];
+	for (const candidate of new Set(candidates.filter((p) => Boolean(p)))) try {
+		const directory = await realpath(resolve(candidate));
+		const path = await realpath(join(directory, "SKILL.md"));
+		const rel = relative(directory, path);
+		if (rel.startsWith("..") || isAbsolute(rel) || !(await stat(path)).isFile()) continue;
+		const { data } = await readHeader(path);
+		if (data.name === "oil-ui-pro") return directory;
+	} catch {}
+	return null;
+}
+async function discoverSkill(options = {}) {
+	const pro = options.preferPro !== false ? await findPro(options) : null;
+	const active = pro ? {
+		edition: "pro",
+		name: "oil-ui-pro",
+		directory: pro,
+		source: "local-pro"
+	} : {
+		edition: "lite",
+		name: "oil-ui",
+		directory: bundledSkillDirectory,
+		source: "bundled-lite"
+	};
+	return {
+		active,
+		header: await readHeader(join(active.directory, "SKILL.md"))
+	};
+}
+async function resolveActiveSkill(options = {}) {
+	return (await discoverSkill(options)).active;
+}
+async function loadReviewerManual(options = {}, activeSkill) {
+	const active = activeSkill ?? await resolveActiveSkill(options).catch(() => void 0);
+	for (const directory of /* @__PURE__ */ new Set([...active ? [active.directory] : [], bundledSkillDirectory])) try {
+		const base = await realpath(directory);
+		const path = await realpath(join(base, "references/reviewer-manual.md"));
+		const rel = relative(base, path);
+		if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) continue;
+		return await readFile(path, "utf8");
+	} catch {}
+	return "";
+}
+async function isBundledSkillDirectory(directory) {
+	try {
+		return await realpath(directory) === await realpath(bundledSkillDirectory);
+	} catch {
+		return false;
+	}
+}
+async function loadSkillDirectory(directory, expectedName, source) {
+	const base = await realpath(directory);
+	const path = await realpath(join(base, "SKILL.md"));
+	const rel = relative(base, path);
+	if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Skill entry escapes its resource directory");
+	const { data, content } = frontmatter(await readFile(path, "utf8"));
+	if (data.name !== expectedName) throw new Error("Invalid active Skill identity");
+	return {
+		name: expectedName,
+		description: typeof data.description === "string" ? data.description : "Oil UI",
+		metadata: data.metadata,
+		path: join(directory, "SKILL.md"),
+		source,
+		resourceBase: {
+			kind: "directory",
+			path: directory
+		},
+		invocation: {
+			modelInvocable: true,
+			userInvocable: true
+		},
+		content
+	};
+}
+async function loadUpstreamSkill(options = {}) {
+	const active = await resolveActiveSkill(options);
+	return loadSkillDirectory(active.directory, active.name, active.source);
+}
+function createSkillProvider(_options, control) {
+	const name = "oil-ui-provider";
+	return {
+		name,
+		async list(lookup) {
+			control.signal.throwIfAborted();
+			lookup.signal?.throwIfAborted();
+			const skill = await loadUpstreamSkill({ preferPro: false });
+			return [{
+				...skill,
+				provider: name,
+				invocation: skill.invocation,
+				rank: 20,
+				locator: "bundled-lite"
+			}];
+		},
+		async get(candidate, lookup) {
+			if (candidate.name !== "oil-ui") return void 0;
+			control.signal.throwIfAborted();
+			lookup.signal?.throwIfAborted();
+			return {
+				...await loadUpstreamSkill({ preferPro: false }),
+				provider: name,
+				invocation: {
+					modelInvocable: true,
+					userInvocable: true
+				}
+			};
+		}
+	};
+}
+async function matchesNativeSkill(visible) {
+	if (!visible || visible.invocation?.modelInvocable === false || visible.resourceBase?.kind !== "directory") return false;
+	if (visible.name !== "oil-ui" && visible.name !== "oil-ui-pro") return false;
+	try {
+		const expected = await loadSkillDirectory(await realpath(visible.resourceBase.path), visible.name, "filesystem");
+		return visible.name === expected.name && visible.metadata?.version === expected.metadata?.version && visible.content.trim() === expected.content.trim() && Boolean(visible.path && expected.path && await realpath(visible.path) === await realpath(expected.path));
+	} catch {
+		return false;
+	}
+}
+async function skillStatus(visible, options = {}, snapshot, refreshVisible) {
+	snapshot ??= await discoverSkill(options);
+	const matchedBeforeUpdate = await matchesNativeSkill(visible);
+	const targetBase = visible?.resourceBase?.kind === "directory" ? visible.resourceBase.path : null;
+	const targetEdition = visible?.name === "oil-ui-pro" ? "pro" : "lite";
+	const updateInfo = await checkSkillUpdate(visible && targetBase && (visible.name === "oil-ui-pro" || visible.name === "oil-ui") ? {
+		edition: targetEdition,
+		name: visible.name,
+		directory: targetBase,
+		source: await isBundledSkillDirectory(targetBase) ? "bundled-lite" : "filesystem"
+	} : snapshot.active, String(visible?.metadata?.version ?? "unknown"), Boolean(options.update && matchedBeforeUpdate));
+	if (updateInfo.updated) {
+		if (refreshVisible) visible = await refreshVisible();
+		snapshot = await discoverSkill(options);
+	}
+	const { active, header } = snapshot;
+	const manifestPath = join(bundledSkillDirectory, "../oil-ui.manifest.json");
+	const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+	const visibleMatchesOriginal = updateInfo.updated ? await matchesNativeSkill(visible) : matchedBeforeUpdate;
+	const effectiveBase = visible?.resourceBase?.kind === "directory" ? visible.resourceBase.path : null;
+	const effectiveName = visible?.name ?? active.name;
+	const edition = effectiveName === "oil-ui-pro" ? "pro" : "lite";
+	const activeVersion = String(visible?.metadata?.version ?? "unknown");
+	const pro = visible?.name === "oil-ui-pro" && visibleMatchesOriginal && effectiveBase ? await realpath(effectiveBase) : await findPro(options);
+	const imageGenScriptPath = await resolveImageGenScript(options);
+	const oilToken = await readOilToken();
+	let oilLoggedIn = Boolean(oilToken);
+	let oilBalance = null;
+	let oilBalanceError = null;
+	if (oilToken) try {
+		oilBalance = await readOilCredits(oilToken);
+	} catch (error) {
+		if (error instanceof OilApiError && error.status === 401) oilLoggedIn = false;
+		oilBalanceError = "无法查询 oiloil 余额";
+	}
+	const skillLoadState = visibleMatchesOriginal ? "ready" : !visible || visible.invocation?.modelInvocable === false ? "unavailable" : "overridden";
+	const skillLoadWarning = visibleMatchesOriginal ? null : !visible ? "当前作用域未能加载 Oil UI Skill。" : visible.invocation?.modelInvocable === false ? `当前 Skill 由 ${visible.provider} 发布，但已禁止模型调用。` : `当前 Skill 由 ${visible.provider} 发布，其正文、资源目录、版本或入口路径与实际安装不一致。`;
+	return {
+		skillReady: visibleMatchesOriginal,
+		nativeSkillReady: visibleMatchesOriginal,
+		skillLoadState,
+		skillLoadWarning,
+		imageGenAvailable: imageGenScriptPath !== null,
+		imageGenScriptPath,
+		imageSource: imageGenScriptPath ? "image-gen" : oilLoggedIn ? "oiloil" : "none",
+		oilLoggedIn,
+		oilBalance,
+		oilBalanceError,
+		edition,
+		activeSkillName: effectiveName,
+		detected: {
+			name: active.name,
+			edition: active.edition,
+			version: String(header.data.metadata?.version ?? "unknown"),
+			path: join(active.directory, "SKILL.md")
+		},
+		effective: visible ? {
+			name: visible.name,
+			version: activeVersion,
+			path: visible.path,
+			resourceBase: visible.resourceBase,
+			provider: visible.provider
+		} : null,
+		activeVersion,
+		latestVersion: updateInfo.latestVersion,
+		updateAvailable: updateInfo.updateAvailable,
+		updated: updateInfo.updated,
+		updateNotice: updateInfo.updateNotice,
+		updateCheckError: updateInfo.lastError,
+		bundledVersion: manifest.version,
+		proInstalled: pro !== null,
+		proVisible: visible?.name === "oil-ui-pro",
+		proSourcePath: pro,
+		activeResourceBase: effectiveBase,
+		name: effectiveName,
+		version: activeVersion,
+		fileCount: manifest.files.length,
+		manifestPath,
+		resourceBase: visible?.resourceBase ?? null,
+		path: visible?.path ?? null,
+		visibleMatchesOriginal,
+		upgradeHint: skillLoadWarning ?? (edition === "pro" ? "已加载本机 Pro 原文，宿主工具用法见 references/tools.md。" : pro ? "已发现本地 Pro，但当前 Agent 的 filesystem Skill 目录未发布它；当前加载生效的 Lite 原文。配置插件发现路径不会发布 Pro，请检查 Harness 的 Skill 目录。" : "可通过 npx github:oil-oil/oil-cli install oil-ui-pro 安装 Pro；由 Harness filesystem Provider 发现并直接加载原文。"),
+		note: "All Oil UI instructions are loaded unchanged. Manifest hashes are offline evidence for the bundled public Skill only."
+	};
+}
+//#endregion
+//#region src/config.ts
+const Config = Schema.object({
+	workspaceRoot: Schema.string().default(""),
+	preferPro: Schema.boolean().default(true),
+	bundledSkill: Schema.boolean().default(true),
+	proSkillDir: Schema.string().default(""),
+	imageGenScript: Schema.string().default(""),
+	previewPort: Schema.number().min(0).max(65535).default(0)
+});
+//#endregion
+//#region src/explorer.ts
+const MIME$1 = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".gif": "image/gif",
+	".svg": "image/svg+xml",
+	".ico": "image/x-icon",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".ttf": "font/ttf",
+	".otf": "font/otf",
+	".mp4": "video/mp4",
+	".webm": "video/webm",
+	".js": "text/javascript",
+	".css": "text/css"
+};
+const STORAGE_SHIM = `<script>(()=>{const mem=()=>{const m=new Map();return{get length(){return m.size},key:i=>[...m.keys()][i]??null,getItem:k=>m.has(String(k))?m.get(String(k)):null,setItem:(k,v)=>{m.set(String(k),String(v))},removeItem:k=>{m.delete(String(k))},clear:()=>m.clear()}};for(const n of['localStorage','sessionStorage']){try{window[n].length}catch{Object.defineProperty(window,n,{value:mem(),configurable:true})}}})();<\/script>`;
+const PREVIEW_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; script-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
+function record(value, label) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+	return value;
+}
+function text(value, label) {
+	if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a nonempty string`);
+	return value.trim();
+}
+function viewport(value) {
+	if (value === void 0) return;
+	const match = typeof value === "string" ? /^\s*(\d+)\s*[xX×]\s*(\d+)\s*$/.exec(value) : null;
+	const v = match ? {
+		width: Number(match[1]),
+		height: Number(match[2])
+	} : record(value, "nativeViewport");
+	if (![v.width, v.height].every((n) => typeof n === "number" && Number.isSafeInteger(n) && n > 0)) throw new Error("nativeViewport requires positive integer dimensions");
+	return {
+		width: v.width,
+		height: v.height
+	};
+}
+function loopbackUrl(value) {
+	const url = new URL(text(value, "url"));
+	if (!["http:", "https:"].includes(url.protocol) || ![
+		"localhost",
+		"127.0.0.1",
+		"[::1]"
+	].includes(url.hostname.toLowerCase()) || url.username || url.password) throw new Error("URL candidates must use a loopback HTTP(S) URL");
+	return url;
+}
+function children(node) {
+	return "childNodes" in node ? node.childNodes : [];
+}
+function elements(node) {
+	const result = [];
+	if ("tagName" in node) result.push(node);
+	for (const child of children(node)) result.push(...elements(child));
+	if ("content" in node) result.push(...elements(node.content));
+	return result;
+}
+function attr(node, key) {
+	return node.attrs.find((a) => a.name === key)?.value;
+}
+function set(node, key, value) {
+	const existing = node.attrs.find((a) => a.name === key);
+	if (existing) existing.value = value;
+	else node.attrs.push({
+		name: key,
+		value
+	});
+}
+function remove(node) {
+	const parent = node.parentNode;
+	if (parent) parent.childNodes.splice(parent.childNodes.indexOf(node), 1);
+}
+function setText(node, value) {
+	node.childNodes = [{
+		nodeName: "#text",
+		value,
+		parentNode: node
+	}];
+}
+function nodeText(node) {
+	return node.childNodes.map((n) => "value" in n ? n.value : "").join("");
+}
+function canonical(value) {
+	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+	if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+	return JSON.stringify(value);
+}
+/** Embeds only resources inside the owning project (or the active template's Skill root). */
+var Embedder = class {
+	root;
+	realRoot;
+	cache = /* @__PURE__ */ new Map();
+	total = 0;
+	constructor(root) {
+		this.root = root;
+		this.realRoot = realpath(root);
+	}
+	async path(value, base) {
+		if (!(process.platform === "win32" && /^[a-z]:[\\/]/i.test(value)) && /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value)) throw new Error(`Use local assets, received ${value}`);
+		const clean = decodeURIComponent(value.split(/[?#]/, 1)[0]).replace(/\\/g, "/");
+		const path = resolve(base, clean);
+		const root = await this.realRoot;
+		const actual = await realpath(path);
+		const rel = relative(root, actual);
+		if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Explorer resources must remain within the project");
+		return actual;
+	}
+	async bytes(path) {
+		if (this.cache.has(path)) return this.cache.get(path);
+		const data = await readFile(path);
+		this.total += data.length;
+		if (data.length > 20971520 || this.total > 104857600) throw new Error("Explorer resource size limit exceeded");
+		this.cache.set(path, data);
+		return data;
+	}
+	async uri(value, base) {
+		if (/^(?:data:|#)/i.test(value)) return value;
+		const path = await this.path(value, base);
+		const hash = value.includes("#") ? `#${value.split("#").slice(1).join("#")}` : "";
+		return `data:${MIME$1[extname(path).toLowerCase()] ?? "application/octet-stream"};base64,${(await this.bytes(path)).toString("base64")}${hash}`;
+	}
+	async css(source, base, stack = []) {
+		const tree = postcss.parse(source);
+		const imports = [];
+		tree.walkAtRules("import", (rule) => {
+			imports.push(rule);
+		});
+		for (const rule of imports) {
+			const params = valueParser(rule.params);
+			const first = params.nodes.find((n) => n.type !== "space" && n.type !== "comment");
+			const url = first?.type === "string" ? first.value : first?.type === "function" && first.value.toLowerCase() === "url" ? valueParser.stringify(first.nodes).replace(/^['"]|['"]$/g, "") : "";
+			if (!first || !url) throw new Error("Unsupported CSS import");
+			const file = await this.path(url, base);
+			if (stack.includes(file)) throw new Error("CSS import cycle");
+			const css = await this.css((await this.bytes(file)).toString("utf8"), dirname(file), [...stack, file]);
+			const tail = valueParser.stringify(params.nodes.slice(params.nodes.indexOf(first) + 1)).trim();
+			if (/^(?:layer|supports)\b/i.test(tail)) throw new Error("Inline layered CSS imports before generating the explorer");
+			rule.replaceWith(postcss.parse(tail ? `@media ${tail}{${css}}` : css));
+		}
+		const declarations = [];
+		tree.walkDecls((decl) => {
+			declarations.push(decl);
+		});
+		for (const decl of declarations) {
+			const parsed = valueParser(decl.value);
+			const urls = [];
+			parsed.walk((node) => {
+				if (node.type === "function" && node.value.toLowerCase() === "url") {
+					urls.push(node);
+					return false;
+				}
+			});
+			for (const node of urls) {
+				const url = valueParser.stringify(node.nodes).trim().replace(/^['"]|['"]$/g, "");
+				node.nodes = [{
+					type: "string",
+					quote: "\"",
+					value: await this.uri(url, base),
+					sourceIndex: 0,
+					sourceEndIndex: 0
+				}];
+			}
+			decl.value = parsed.toString();
+		}
+		return tree.toString();
+	}
+	async module(source, base, stack = []) {
+		const ast = parse$2(source, {
+			ecmaVersion: "latest",
+			sourceType: "module"
+		});
+		const edits = [];
+		const visit = async (node) => {
+			if (!node || typeof node !== "object") return;
+			const n = node;
+			if ([
+				"ImportDeclaration",
+				"ExportNamedDeclaration",
+				"ExportAllDeclaration",
+				"ImportExpression"
+			].includes(String(n.type)) && n.source) {
+				const literal = n.source;
+				if (typeof literal.value !== "string") throw new Error("Use literal local module imports in explorer candidates");
+				let url = literal.value;
+				if (!url.startsWith("data:")) {
+					const path = await this.path(url, base);
+					if (stack.includes(path)) throw new Error("Module import cycle; bundle the candidate first");
+					const code = await this.module((await this.bytes(path)).toString("utf8"), dirname(path), [...stack, path]);
+					url = `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+				}
+				edits.push({
+					start: literal.start,
+					end: literal.end,
+					value: JSON.stringify(url)
+				});
+			}
+			for (const value of Object.values(n)) if (Array.isArray(value)) for (const item of value) await visit(item);
+			else if (value && typeof value === "object") await visit(value);
+		};
+		await visit(ast);
+		for (const edit of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, edit.start) + edit.value + source.slice(edit.end);
+		return source;
+	}
+	async html(source, base, interactive, template = false) {
+		const document = parse$1(source);
+		const nodes = elements(document);
+		const deferred = [];
+		for (const node of nodes) {
+			const tag = node.tagName;
+			if (!template && ([
+				"iframe",
+				"frame",
+				"object",
+				"embed",
+				"base"
+			].includes(tag) || tag === "meta" && ["refresh", "content-security-policy"].includes((attr(node, "http-equiv") ?? "").toLowerCase()))) throw new Error("Candidate contains a nested document, redirect or conflicting CSP");
+			if (tag === "script") {
+				const type = attr(node, "type")?.toLowerCase();
+				const executable = !type || [
+					"module",
+					"text/javascript",
+					"application/javascript"
+				].includes(type);
+				if (!template && executable && !interactive) {
+					remove(node);
+					continue;
+				}
+				const src = attr(node, "src");
+				if (src) {
+					const path = await this.path(src, base);
+					let code = (await this.bytes(path)).toString("utf8");
+					if (type === "module") code = await this.module(code, dirname(path), [path]);
+					setText(node, code.replace(/<\/script/gi, "<\\/script"));
+					if (attr(node, "defer") !== void 0 && type !== "module") deferred.push(node);
+					node.attrs = node.attrs.filter((a) => ![
+						"src",
+						"defer",
+						"async",
+						"integrity",
+						"crossorigin"
+					].includes(a.name));
+				} else if (!template && type === "module") setText(node, await this.module(nodeText(node), base));
+				continue;
+			}
+			if (tag === "link" && (attr(node, "rel") ?? "").toLowerCase() === "stylesheet") {
+				const path = await this.path(text(attr(node, "href"), "stylesheet href"), base);
+				node.tagName = node.nodeName = "style";
+				node.attrs = node.attrs.filter((a) => ["media", "title"].includes(a.name));
+				setText(node, (await this.css((await this.bytes(path)).toString("utf8"), dirname(path), [path])).replace(/<\/style/gi, "<\\/style"));
+				continue;
+			}
+			if (tag === "style") setText(node, await this.css(nodeText(node), base));
+			if (attr(node, "style")) set(node, "style", (await this.css(`x{${attr(node, "style")}}`, base)).slice(2, -1));
+			if (attr(node, "srcset")) {
+				if (!attr(node, "src")) set(node, "src", attr(node, "srcset").split(",").at(-1).trim().split(/\s+/)[0]);
+				node.attrs = node.attrs.filter((a) => a.name !== "srcset");
+			}
+			for (const key of [
+				"src",
+				"poster",
+				"href"
+			]) {
+				const value = attr(node, key);
+				if (!value || value.startsWith("#") || /^data:/i.test(value)) continue;
+				if (key === "href" && tag === "a") {
+					if (!template) set(node, key, "#");
+					continue;
+				}
+				set(node, key, await this.uri(value, base));
+			}
+		}
+		const body = nodes.find((n) => n.tagName === "body");
+		for (const node of deferred) {
+			remove(node);
+			node.parentNode = body;
+			body.childNodes.push(node);
+		}
+		let output = serialize(document);
+		if (!template) {
+			const policy = interactive ? PREVIEW_CSP.replace("script-src 'none'", "script-src 'unsafe-inline' 'unsafe-eval' data:") : PREVIEW_CSP;
+			output = output.replace(/<head>/i, `<head><meta http-equiv="Content-Security-Policy" content="${policy}">${interactive ? STORAGE_SHIM : ""}`);
+		}
+		return output;
+	}
+};
+async function defaultManifest(project, embed = new Embedder(project.directory)) {
+	const candidates = [];
+	for (const id of [
+		"a",
+		"b",
+		"c"
+	]) {
+		let foundPath = null;
+		let foundSource = `${id}.html`;
+		for (const rel of [
+			`directions/${id}.html`,
+			`explore/${id}.html`,
+			`direction-${id}.html`,
+			`${id}.html`
+		]) try {
+			foundPath = await embed.path(rel, project.directory);
+			foundSource = rel;
+			break;
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		if (!foundPath) throw new Error(`Missing direction candidate ${id}.html (checked directions/, explore/, direction-${id}.html, and workspace root)`);
+		const html = (await embed.bytes(foundPath)).toString("utf8");
+		const title = elements(parse$1(html)).find((n) => n.tagName === "title");
+		const palette = [...new Set(html.match(/#(?:[a-f\d]{8}|[a-f\d]{6}|[a-f\d]{4}|[a-f\d]{3})(?![a-z\d_])/gi) ?? ["#222222", "#ffffff"])].slice(0, 6);
+		candidates.push({
+			id,
+			name: title ? nodeText(title).trim() || id.toUpperCase() : id.toUpperCase(),
+			concept: project.request,
+			typography: "沿用候选页面的字体设置",
+			traits: ["比较页面的布局、字体与配色"],
+			palette,
+			kind: "html",
+			source: foundSource
+		});
+	}
+	return {
+		schemaVersion: 1,
+		project: project.title,
+		brief: project.request,
+		candidates
+	};
+}
+async function buildExplorer(input, projectDirectory, active, manifestDir, outputPath, embed = new Embedder(projectDirectory)) {
+	const raw = record(typeof input === "string" ? JSON.parse(input) : input, "manifest");
+	if (raw.schemaVersion !== void 0 && raw.schemaVersion !== 1) throw new Error("manifest.schemaVersion must be 1");
+	const data = { schemaVersion: 1 };
+	for (const key of [
+		"project",
+		"brief",
+		"round"
+	]) if (raw[key] !== void 0) data[key] = text(raw[key], key);
+	if (raw.lang !== void 0) {
+		if (!["zh", "en"].includes(String(raw.lang))) throw new Error("lang must be zh or en");
+		data.lang = raw.lang;
+	}
+	const sharedViewport = viewport(raw.nativeViewport);
+	if (raw.serve !== void 0) {
+		const serve = record(raw.serve, "serve");
+		text(serve.command, "serve.command");
+		if (serve.cwd !== void 0 && !isAbsolute(text(serve.cwd, "serve.cwd"))) throw new Error("serve.cwd must be absolute");
+		if (serve.url !== void 0) loopbackUrl(serve.url);
+		data.serve = serve;
+	}
+	if (!Array.isArray(raw.candidates) || !raw.candidates.length) throw new Error("candidates must contain at least one candidate");
+	const ids = /* @__PURE__ */ new Set();
+	const reservedIds = new Set(raw.candidates.flatMap((value) => value && typeof value === "object" && !Array.isArray(value) && typeof value.id === "string" ? [value.id.trim()] : []));
+	const candidates = [];
+	const origins = /* @__PURE__ */ new Set();
+	const searchBases = [.../* @__PURE__ */ new Set([
+		...manifestDir ? [manifestDir] : [],
+		resolve(projectDirectory, "directions"),
+		resolve(projectDirectory, "explore"),
+		projectDirectory
+	])];
+	const resolvedOut = outputPath ? await realpath(dirname(outputPath)).then((d) => resolve(d, relative(dirname(outputPath), outputPath)), () => resolve(outputPath)) : resolve(projectDirectory, "directions/explorer.html");
+	for (const value of raw.candidates) {
+		const c = record(value, "candidate");
+		let id;
+		if (c.id === void 0) {
+			const stem = `candidate-${candidates.length + 1}`;
+			id = stem;
+			let suffix = 2;
+			while (ids.has(id) || reservedIds.has(id)) id = `${stem}-${suffix++}`;
+		} else id = text(c.id, "candidate.id");
+		if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) || ids.has(id)) throw new Error("Invalid or duplicate candidate id");
+		ids.add(id);
+		const kind = c.kind ?? "html";
+		if (![
+			"html",
+			"image",
+			"url"
+		].includes(String(kind))) throw new Error("kind must be html, image or url");
+		for (const flag of ["interactive", "baseline"]) if (c[flag] !== void 0 && typeof c[flag] !== "boolean") throw new Error(`${flag} must be boolean`);
+		if (c.interactive && kind !== "html") throw new Error("interactive is only available for html candidates");
+		let palette;
+		if (c.palette !== void 0) {
+			const colors = JSON.stringify(c.palette).match(/#(?:[a-f\d]{8}|[a-f\d]{6}|[a-f\d]{4}|[a-f\d]{3})(?![a-z\d_])/gi);
+			if (!colors?.length) throw new Error("palette requires hexadecimal colors");
+			palette = colors;
+		}
+		let traits;
+		if (c.traits !== void 0) {
+			if (!Array.isArray(c.traits) || !c.traits.length) throw new Error("traits must be nonempty");
+			traits = c.traits.map((v) => text(v, "trait"));
+		}
+		const concept = c.concept === void 0 ? void 0 : text(c.concept, "concept");
+		const typography = c.typography === void 0 ? void 0 : text(c.typography, "typography");
+		let name = c.name === void 0 ? void 0 : text(c.name, "name");
+		let content;
+		let sourceLabel;
+		if (kind === "url") {
+			const url = loopbackUrl(c.url);
+			content = url.href;
+			sourceLabel = content;
+			const urlName = url.pathname.split("/").filter(Boolean).at(-1) ?? "";
+			try {
+				name ??= decodeURIComponent(urlName) || url.hostname;
+			} catch {
+				name ??= urlName || url.hostname;
+			}
+			origins.add(url.origin.replace("[::1]", "localhost"));
+		} else {
+			const source = text(c.source, "source");
+			let path;
+			let lastError;
+			for (const base of searchBases) try {
+				path = await embed.path(source, base);
+				break;
+			} catch (error) {
+				lastError = error;
+				if (error.code !== "ENOENT") throw error;
+			}
+			if (!path) throw lastError ?? /* @__PURE__ */ new Error(`Missing candidate source: ${source}`);
+			const relPath = relative(projectDirectory, path).split(sep).join("/");
+			if (path === resolvedOut || relPath === "directions/explorer.html" || relPath === "style-explorer.html") throw new Error("Explorer cannot overwrite an input candidate");
+			sourceLabel = source.split(/[\\/]/).at(-1);
+			if (!name && kind === "html") {
+				const sourceHtml = (await embed.bytes(path)).toString("utf8");
+				const title = elements(parse$1(sourceHtml)).find((n) => n.tagName === "title");
+				name = title ? nodeText(title).trim() || void 0 : void 0;
+			}
+			name ??= basename(sourceLabel, extname(sourceLabel)) || basename(sourceLabel);
+			content = kind === "html" ? await embed.html((await embed.bytes(path)).toString("utf8"), dirname(path), Boolean(c.interactive)) : await embed.uri(path, dirname(path));
+			if (kind === "image" && !/^data:image\//.test(content)) throw new Error("Image candidates require an image file");
+		}
+		name ??= `Candidate ${candidates.length + 1}`;
+		const size = viewport(c.nativeViewport) ?? sharedViewport;
+		candidates.push({
+			id,
+			name,
+			...concept !== void 0 ? { concept } : {},
+			...typography !== void 0 ? { typography } : {},
+			...palette ? { palette } : {},
+			...traits ? { traits } : {},
+			kind,
+			content,
+			sourceLabel,
+			baseline: c.baseline ?? false,
+			interactive: c.interactive ?? false,
+			...size ? { nativeViewport: size } : {}
+		});
+	}
+	if (candidates.filter((c) => c.baseline).length > 1) throw new Error("At most one baseline candidate is allowed");
+	candidates.sort((a, b) => Number(b.baseline) - Number(a.baseline));
+	data.candidates = candidates;
+	data.fingerprint = createHash("sha256").update(canonical(data)).digest("hex").slice(0, 24);
+	data.edition = active.edition === "pro" ? "pro" : "open";
+	const templateRoot = active.directory;
+	const templateEmbedder = new Embedder(templateRoot);
+	const templatePath = await templateEmbedder.path("assets/style-explorer.html", templateRoot);
+	const rawTemplate = await templateEmbedder.html((await templateEmbedder.bytes(templatePath)).toString("utf8"), dirname(templatePath), true, true);
+	const template = [
+		"project",
+		"brief",
+		"round"
+	].some((key) => data[key] === void 0) || candidates.some((candidate) => [
+		"concept",
+		"typography",
+		"palette",
+		"traits"
+	].some((key) => candidate[key] === void 0)) ? makeOptionalFieldsTemplateCompatible(rawTemplate) : rawTemplate;
+	const marker = "/*__OIL_UI_DATA__*/ null";
+	if (template.split(marker).length !== 2 || template.split("connect-src 'none'").length !== 2) throw new Error("Invalid style-explorer template markers");
+	const payload = JSON.stringify(data).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+	return template.replace("connect-src 'none'", `connect-src ${origins.size ? [...origins].sort().join(" ") : "'none'"}`).replace(marker, () => payload);
+}
+/** Bring older bundled templates up to the optional-field rendering contract. */
+function makeOptionalFieldsTemplateCompatible(template) {
+	return template.replace("$('#project').textContent=DATA.project;", "$('#project').textContent=DATA.project||'';").replace("function stripMini(c){const s=el('span','strip-mini');(c.palette||[]).forEach(h=>{const i=el('i');i.style.background=h;s.append(i);});return s;}", "function stripMini(c){if(!c.palette?.length)return null;const s=el('span','strip-mini');c.palette.forEach(h=>{const i=el('i');i.style.background=h;s.append(i);});return s;}").replace("function specList(c){\n  const dl=el('dl','spec');const row=(k,v)=>{dl.append(el('dt',null,k),el('dd',null,v));};\n  row(t('fonts'),c.typography);row(t('traits'),(c.traits||[]).join(' · '));return dl;\n }", "function specList(c){\n  const dl=el('dl','spec');const row=(k,v)=>{dl.append(el('dt',null,k),el('dd',null,v));};\n  if(c.typography)row(t('fonts'),c.typography);if(c.traits?.length)row(t('traits'),c.traits.join(' · '));return dl.children.length?dl:null;\n }").replace("const cap=el('div','cap');cap.style.viewTransitionName=`cap-${C.indexOf(c)}`;cap.append(el('span',c.baseline?'no base':'no',no(c)),el('h2','name',c.name),stripMini(c),pickButton(c));\n  const lede=el('p','lede',c.concept);lede.title=c.concept;lede.style.viewTransitionName=`lede-${C.indexOf(c)}`;\n  a.append(frame,cap,lede);return a;", "const cap=el('div','cap');cap.style.viewTransitionName=`cap-${C.indexOf(c)}`;cap.append(el('span',c.baseline?'no base':'no',no(c)),el('h2','name',c.name));const mini=stripMini(c);if(mini)cap.append(mini);cap.append(pickButton(c));\n  a.append(frame,cap);if(c.concept){const lede=el('p','lede',c.concept);lede.title=c.concept;lede.style.viewTransitionName=`lede-${C.indexOf(c)}`;a.append(lede);}return a;").replace("blocks.push(el('p','north',c.concept),sw,specList(c));", "if(c.concept)blocks.push(el('p','north',c.concept));if(sw.children.length)blocks.push(sw);const spec=specList(c);if(spec)blocks.push(spec);");
+}
+//#endregion
+//#region src/processes.ts
+function timeout(value, fallback) {
+	const ms = value ?? fallback;
+	if (!Number.isInteger(ms) || ms < 1 || ms > 9e5) throw new Error("timeoutMs must be an integer between 1 and 900000");
+	return ms;
+}
+var ManagedProcesses = class {
+	active = /* @__PURE__ */ new Set();
+	stopped = false;
+	kill(child, signal) {
+		try {
+			if (process.platform !== "win32" && child.pid) process.kill(-child.pid, signal);
+			else child.kill(signal);
+		} catch {}
+	}
+	run(script, args, cwd, timeoutMs, signal) {
+		return this.runCommand(process.execPath, [script, ...args], cwd, timeoutMs, signal);
+	}
+	runCommand(executable, args, cwd, timeoutMs, signal) {
+		if (this.stopped) throw new Error("Workbench is disposed");
+		if (signal?.aborted) throw new Error("Tool invocation aborted");
+		return new Promise((done, reject) => {
+			const child = spawn(executable, args, {
+				cwd,
+				stdio: [
+					"ignore",
+					"pipe",
+					"pipe"
+				],
+				detached: process.platform !== "win32",
+				shell: false
+			});
+			this.active.add(child);
+			let stdout = "", stderr = "", timedOut = false, outputLimit = false, aborted = false;
+			let escalation;
+			const stop = () => {
+				this.kill(child, "SIGTERM");
+				escalation ??= setTimeout(() => this.kill(child, "SIGKILL"), 500);
+			};
+			const abort = () => {
+				aborted = true;
+				stop();
+			};
+			signal?.addEventListener("abort", abort, { once: true });
+			const timer = setTimeout(() => {
+				timedOut = true;
+				stop();
+			}, timeoutMs);
+			const capture = (chunk, stream) => {
+				if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) + Buffer.byteLength(chunk) > 4194304) {
+					outputLimit = true;
+					stop();
+					return;
+				}
+				if (stream === "stdout") stdout += chunk.toString("utf8");
+				else stderr += chunk.toString("utf8");
+			};
+			child.stdout.setEncoding("utf8");
+			child.stderr.setEncoding("utf8");
+			child.stdout.on("data", (chunk) => capture(chunk, "stdout"));
+			child.stderr.on("data", (chunk) => capture(chunk, "stderr"));
+			const cleanup = () => {
+				signal?.removeEventListener("abort", abort);
+				clearTimeout(timer);
+				if (escalation) clearTimeout(escalation);
+				this.kill(child, "SIGKILL");
+				this.active.delete(child);
+			};
+			child.once("error", (error) => {
+				cleanup();
+				reject(error);
+			});
+			child.once("close", (exitCode) => {
+				cleanup();
+				if (aborted) stderr += "\nTool invocation aborted";
+				if (outputLimit) stderr += "\nProcess output exceeded 4 MiB";
+				if (timedOut) stderr += `\nProcess timed out after ${timeoutMs}ms`;
+				done({
+					ok: exitCode === 0 && !timedOut && !outputLimit && !aborted,
+					stdout,
+					stderr,
+					timedOut,
+					exitCode
+				});
+			});
+		});
+	}
+	async dispose() {
+		this.stopped = true;
+		const children = [...this.active];
+		await Promise.all(children.map((child) => new Promise((done) => {
+			const timer = setTimeout(() => {
+				this.kill(child, "SIGKILL");
+				done();
+			}, 500);
+			child.once("close", () => {
+				clearTimeout(timer);
+				done();
+			});
+			this.kill(child, "SIGTERM");
+		})));
+	}
+};
+//#endregion
+//#region src/workbench/image.ts
+const IMAGE_MIME_BY_EXTENSION = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp"
+};
+const IMAGE_EXTENSION_BY_MIME = {
+	"image/png": ".png",
+	"image/jpeg": ".jpg",
+	"image/webp": ".webp"
+};
+async function generateImage(workspace, input, dependencies, signal) {
+	if (typeof input.prompt !== "string" || !input.prompt.trim()) throw new Error("prompt must be nonempty");
+	if (input.images !== void 0 && (!Array.isArray(input.images) || input.images.some((path) => typeof path !== "string" || !path.trim()))) throw new Error("images must be local file paths");
+	const images = input.images ?? [];
+	if (images.length > 16) throw new Error("At most 16 reference images are supported");
+	const mode = input.mode ?? (images.length ? "edit" : "generate");
+	if (!["generate", "edit"].includes(mode)) throw new Error("mode must be generate or edit");
+	if (mode === "edit" && !images.length) throw new Error("edit requires 1–16 reference images");
+	if (mode === "generate" && images.length) throw new Error("Use edit mode with reference images");
+	const script = await resolveImageGenScript({
+		...dependencies.skillOptions,
+		cwd: workspace
+	});
+	if (!script) return oilImage(workspace, input, mode, images, dependencies, signal);
+	const size = input.size ?? "1024x1024";
+	const dimensions = /^(\d+)x(\d+)$/.exec(size);
+	if (size !== "auto" && (!dimensions || !dimensions.slice(1).every((n) => Number.isSafeInteger(Number(n)) && Number(n) > 0))) throw new Error("size must be auto or positive WIDTHxHEIGHT dimensions");
+	if (input.background !== void 0 && ![
+		"auto",
+		"opaque",
+		"transparent"
+	].includes(input.background)) throw new Error("Invalid image background");
+	if (input.model !== void 0 && !input.model.trim()) throw new Error("model must be nonempty");
+	const timeoutMs = timeout(input.timeoutMs, 18e4);
+	let out = await dependencies.scopedPath(workspace, input.out ?? "assets/generated.png");
+	if (!input.out && input.force !== true) {
+		let suffix = 1;
+		while (await lstat(out).then(() => true, (e) => {
+			if (e.code === "ENOENT") return false;
+			throw e;
+		})) out = await dependencies.scopedPath(workspace, `assets/generated-${suffix++}.png`);
+	}
+	const extension = extname(out).toLowerCase();
+	if (![
+		".png",
+		".jpg",
+		".jpeg",
+		".webp"
+	].includes(extension)) throw new Error("out must be PNG, JPEG or WebP");
+	if (input.background === "transparent" && [".jpg", ".jpeg"].includes(extension)) throw new Error("Transparent backgrounds require PNG or WebP");
+	if (input.force !== true && await lstat(out).then(() => true, (e) => {
+		if (e.code === "ENOENT") return false;
+		throw e;
+	})) throw new Error("Output already exists; enable force to overwrite");
+	const references = [];
+	for (const image of images) {
+		const path = await dependencies.scopedPath(workspace, image);
+		if (!(await stat(path)).isFile()) throw new Error("Reference images must be local files");
+		references.push(path);
+	}
+	await dependencies.safeOutput(dirname(out));
+	const promptPath = join(dirname(out), `.prompt-${randomUUID()}.txt`);
+	let promptCreated = false;
+	try {
+		const promptFile = await open(promptPath, "wx", 384);
+		promptCreated = true;
+		try {
+			await promptFile.writeFile(input.prompt);
+		} finally {
+			await promptFile.close();
+		}
+		const args = [
+			script,
+			mode,
+			"--prompt-file",
+			promptPath,
+			"--out",
+			out,
+			"--size",
+			size,
+			"--json"
+		];
+		if (input.background) args.push("--background", input.background);
+		if (input.model) args.push("--model", input.model.trim());
+		if (input.force === true) args.push("--force");
+		for (const reference of references) args.push("--image", reference);
+		const result = await dependencies.processes.runCommand("python3", args, workspace, timeoutMs, signal);
+		let data = null;
+		try {
+			const parsed = JSON.parse(result.stdout);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Expected a JSON object");
+			data = parsed;
+		} catch {
+			result.ok = false;
+			result.stderr += "\nImage script returned invalid JSON";
+		}
+		const reported = [];
+		for (const value of [
+			data?.files,
+			data?.outputs,
+			data?.outputFiles
+		]) if (Array.isArray(value)) reported.push(...value);
+		for (const key of [
+			"saved",
+			"path",
+			"out",
+			"output"
+		]) if (typeof data?.[key] === "string") reported.push(data[key]);
+		const outputFiles = [];
+		if (!reported.length && result.ok) reported.push(out);
+		for (const entry of reported) {
+			const value = typeof entry === "string" ? entry : entry && typeof entry === "object" ? entry.path ?? entry.saved ?? entry.file : void 0;
+			if (typeof value !== "string") continue;
+			const path = resolve(workspace, value);
+			if (path !== out || outputFiles.includes(path)) continue;
+			if (await lstat(path).then((info) => info.isFile(), () => false)) outputFiles.push(path);
+		}
+		return {
+			ok: result.ok && outputFiles.length > 0,
+			source: "image-gen",
+			mode,
+			outputFiles,
+			model: typeof data?.model === "string" ? data.model : input.model ?? null,
+			size,
+			background: input.background ?? data?.background ?? null,
+			data,
+			stdout: result.stdout,
+			stderr: result.stderr
+		};
+	} finally {
+		if (promptCreated) await rm(promptPath, { force: true });
+	}
+}
+async function oilImage(workspace, input, mode, images, dependencies, signal) {
+	const token = await readOilToken();
+	if (!token) return {
+		ok: false,
+		outputFiles: [],
+		reason: "no_image_tool",
+		agentInstruction: "没有可用的生图工具。合适的时候友好提示用户一次：可运行 `npx github:oil-oil/oil-cli login` 登录 oiloil 并在 https://ui.oiloil.org/account 充值，或自行配置生图工具；任务照常继续。"
+	};
+	if (images.length > 1) return {
+		ok: false,
+		outputFiles: [],
+		reason: "unsupported_reference_count",
+		agentInstruction: "oiloil 生图一次只支持一张参考图；请选择一张后重试，或调整提示词后继续。"
+	};
+	if (input.model?.trim()) return {
+		ok: false,
+		outputFiles: [],
+		reason: "unsupported_model_option",
+		agentInstruction: "oiloil 生图不支持指定模型；去掉 model 参数后重试，或继续其他任务。"
+	};
+	const requestedSize = input.size ?? "1K";
+	const size = requestedSize === "auto" ? "1K" : requestedSize;
+	if (![
+		"1K",
+		"2K",
+		"4K"
+	].includes(size) && !/^\d{3,4}x\d{3,4}$/.test(size)) throw new Error("size must be 1K, 2K, 4K or supported WIDTHxHEIGHT dimensions");
+	let referenceImage;
+	if (images.length === 1) {
+		const reference = await dependencies.scopedPath(workspace, images[0]);
+		const info = await stat(reference);
+		if (!info.isFile()) throw new Error("Reference images must be local files");
+		if (info.size > 2097152) return {
+			ok: false,
+			outputFiles: [],
+			reason: "reference_image_too_large",
+			agentInstruction: "oiloil 参考图上限为 2 MiB，请缩小图片后重试，或去掉参考图继续。"
+		};
+		const mimeType = IMAGE_MIME_BY_EXTENSION[extname(reference).toLowerCase()];
+		if (!mimeType) throw new Error("Reference images must be PNG, JPEG or WebP files");
+		referenceImage = `data:${mimeType};base64,${(await readFile(reference)).toString("base64")}`;
+	}
+	let target = await dependencies.scopedPath(workspace, input.out ?? "assets/generated.png");
+	const explicitOutput = Boolean(input.out);
+	const requestedExtension = extname(target).toLowerCase();
+	if (explicitOutput && !IMAGE_MIME_BY_EXTENSION[requestedExtension]) throw new Error("out must be PNG, JPEG or WebP");
+	if (input.force !== true && explicitOutput && await lstat(target).then(() => true, (e) => {
+		if (e.code === "ENOENT") return false;
+		throw e;
+	})) throw new Error("Output already exists; enable force to overwrite");
+	const requestedTarget = target;
+	await dependencies.safeOutput(dirname(target));
+	const prompt = input.background === "transparent" && !/transparent|透明/i.test(input.prompt) ? `${input.prompt}\n请使用透明背景。` : input.prompt;
+	let result;
+	try {
+		result = await requestOilApi("/images", {
+			method: "POST",
+			body: {
+				prompt,
+				size,
+				quality: "medium",
+				...input.background && input.background !== "auto" ? { background: input.background } : {},
+				...referenceImage ? { reference_image: referenceImage } : {}
+			},
+			idempotencyKey: true,
+			signal,
+			token
+		});
+	} catch (error) {
+		if (error instanceof OilApiError && error.status === 402 && error.code === "insufficient_credits") return {
+			ok: false,
+			outputFiles: [],
+			reason: "insufficient_credits",
+			agentInstruction: "oiloil 余额不足，本次生图未开始。合适的时候友好提示用户一次，可在 https://ui.oiloil.org/account 充值；任务照常继续。"
+		};
+		if (error instanceof OilApiError && error.status === 401) return {
+			ok: false,
+			outputFiles: [],
+			reason: "not_logged_in",
+			agentInstruction: "oiloil 登录状态已失效，暂时没有可用的生图工具。合适的时候友好提示用户一次：可运行 `npx github:oil-oil/oil-cli login` 重新登录，并在 https://ui.oiloil.org/account 充值，或自行配置生图工具；任务照常继续。"
+		};
+		throw error;
+	}
+	const extension = IMAGE_EXTENSION_BY_MIME[result.image?.mime_type];
+	if (!extension || typeof result.image.data !== "string") throw new Error("Oil API returned an unsupported image format.");
+	const bytes = Buffer.from(result.image.data, "base64");
+	if (!bytes.length || bytes.toString("base64") !== result.image.data) throw new Error("Oil API returned an empty or malformed image.");
+	if (explicitOutput) {
+		if (IMAGE_MIME_BY_EXTENSION[requestedExtension] !== result.image.mime_type) {
+			const stem = basename(requestedTarget, extname(requestedTarget));
+			target = join(dirname(requestedTarget), `${stem}${extension}`);
+		}
+	} else target = await dependencies.scopedPath(workspace, `assets/generated${extension}`);
+	const canOverwriteRequestedPath = input.force === true && (!explicitOutput || target === requestedTarget);
+	const actualExtension = extname(target);
+	const actualStem = basename(target, actualExtension);
+	let suffix = 1;
+	while (true) try {
+		const handle = await open(target, canOverwriteRequestedPath ? "w" : "wx", 420);
+		try {
+			await handle.writeFile(bytes);
+		} finally {
+			await handle.close();
+		}
+		break;
+	} catch (error) {
+		if (error.code !== "EEXIST" || canOverwriteRequestedPath) throw error;
+		target = await dependencies.scopedPath(workspace, join(relative(workspace, dirname(target)), `${actualStem}-${suffix++}${actualExtension}`));
+	}
+	return {
+		ok: true,
+		source: "oiloil",
+		mode,
+		size: result.size,
+		outputFiles: [target],
+		usage: result.usage,
+		agentInstruction: `本次生图扣除 ${result.usage.credits} 积分，剩余 ${result.usage.balance} 积分。图片已保存到 ${target}。`
+	};
+}
+//#endregion
+//#region src/workbench/index.ts
+const MIME = {
+	".html": "text/html; charset=utf-8",
+	".css": "text/css; charset=utf-8",
+	".js": "text/javascript; charset=utf-8",
+	".mjs": "text/javascript; charset=utf-8",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".gif": "image/gif",
+	".ico": "image/x-icon",
+	".json": "application/json",
+	".geojson": "application/geo+json",
+	".md": "text/plain; charset=utf-8",
+	".txt": "text/plain; charset=utf-8",
+	".csv": "text/csv; charset=utf-8",
+	".woff2": "font/woff2",
+	".woff": "font/woff",
+	".ttf": "font/ttf",
+	".otf": "font/otf",
+	".wasm": "application/wasm",
+	".glb": "model/gltf-binary",
+	".gltf": "model/gltf+json",
+	".bin": "application/octet-stream",
+	".mp3": "audio/mpeg",
+	".wav": "audio/wav",
+	".ogg": "audio/ogg",
+	".mp4": "video/mp4",
+	".webm": "video/webm",
+	".mov": "video/quicktime"
+};
+const KNOWN_KINDS = [
+	"all",
+	"texture",
+	"design",
+	"photo",
+	"blueprint",
+	"map",
+	"plate",
+	"science",
+	"video"
+];
+const KNOWN_SOURCES = [
+	"polyhaven",
+	"vam",
+	"loc",
+	"wellcome",
+	"nasa",
+	"commons",
+	"met",
+	"aic",
+	"cleveland",
+	"japan",
+	"rijks"
+];
+function isPrivateSegment(relPath) {
+	return relPath.split(/[\\/]/).some((part) => part.startsWith(".") && part !== ".oil-ui" || /^(?:credentials?|secrets?|id_(?:rsa|dsa|ecdsa|ed25519))(?:[._-]|$)/i.test(part));
+}
+var DesignWorkbench = class {
+	defaultRoot;
+	port;
+	skillOptions;
+	disposed = false;
+	servers = /* @__PURE__ */ new Map();
+	pendingServers = /* @__PURE__ */ new Map();
+	processes = new ManagedProcesses();
+	constructor(defaultRootOrPort = "", portOrOptions = 0, skillOptions = {}) {
+		if (typeof defaultRootOrPort === "number") {
+			this.defaultRoot = process.cwd();
+			this.port = defaultRootOrPort;
+			this.skillOptions = typeof portOrOptions === "object" && portOrOptions ? portOrOptions : {};
+		} else {
+			this.defaultRoot = defaultRootOrPort ? resolve(defaultRootOrPort) : process.cwd();
+			this.port = typeof portOrOptions === "number" ? portOrOptions : 0;
+			this.skillOptions = skillOptions;
+		}
+	}
+	async resolveWorkspace(cwd) {
+		if (this.disposed) throw new Error("Workbench is disposed");
+		const target = resolve(cwd?.trim() || this.defaultRoot || process.cwd());
+		await mkdir(target, { recursive: true });
+		const real = await realpath(target);
+		if (this.disposed) throw new Error("Workbench is disposed");
+		return real;
+	}
+	async scopedPath(workspace, inputPath, allowDotFile = false) {
+		if (!inputPath || !inputPath.trim() || inputPath.includes("\0")) throw new Error("A valid workspace path is required");
+		const clean = inputPath.trim().replace(/\\/g, "/");
+		let ancestor = isAbsolute(clean) ? resolve(clean) : resolve(workspace, clean);
+		const suffix = [];
+		while (true) try {
+			const realAncestor = await realpath(ancestor);
+			const full = resolve(realAncestor, ...suffix);
+			const rel = relative(workspace, full);
+			if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Path must remain within the current workspace");
+			if (rel && !allowDotFile && rel.split(sep).some((part) => part === ".." || part.startsWith(".") && part !== ".oil-ui")) throw new Error("Use a workspace path without hidden segments");
+			let current = full;
+			while (current !== workspace && dirname(current) !== current) {
+				if ((await lstat(current).catch((e) => {
+					if (e.code === "ENOENT") return null;
+					throw e;
+				}))?.isSymbolicLink()) throw new Error("Workspace paths cannot traverse symlinks");
+				current = dirname(current);
+			}
+			return full;
+		} catch (error) {
+			if (error.code !== "ENOENT" || dirname(ancestor) === ancestor) throw error;
+			suffix.unshift(basename(ancestor));
+			ancestor = dirname(ancestor);
+		}
+	}
+	async safeOutput(directory) {
+		let current = directory;
+		while (dirname(current) !== current) {
+			if ((await lstat(current).catch((e) => {
+				if (e.code === "ENOENT") return null;
+				throw e;
+			}))?.isSymbolicLink()) throw new Error("Output paths cannot traverse symlinks");
+			current = dirname(current);
+		}
+		await mkdir(directory, { recursive: true });
+	}
+	async collectFiles(directory, prefix = "") {
+		const entries = await readdir(directory, { withFileTypes: true }).catch((e) => {
+			if (e.code === "ENOENT") return [];
+			throw e;
+		});
+		const paths = [];
+		for (const item of entries) {
+			if (item.name.startsWith(".") || item.isSymbolicLink() || item.name === "node_modules") continue;
+			const name = prefix + item.name;
+			if (item.isDirectory()) paths.push(...await this.collectFiles(join(directory, item.name), `${name}/`));
+			else if (item.isFile()) paths.push(name);
+		}
+		return paths.sort();
+	}
+	async script(name, cwd) {
+		const active = await resolveActiveSkill({
+			...this.skillOptions,
+			cwd
+		});
+		const scriptRoot = await realpath(active.directory);
+		const path = await realpath(join(scriptRoot, "scripts", name));
+		const rel = relative(scriptRoot, path);
+		if (rel.startsWith("..") || isAbsolute(rel)) throw new Error("Skill script cannot escape its installation");
+		if (!(await stat(path)).isFile()) throw new Error("Skill script is missing");
+		return path;
+	}
+	async preview(cwd) {
+		const workspace = await this.resolveWorkspace(cwd);
+		const existing = this.servers.get(workspace);
+		if (existing) return existing.url;
+		const pending = this.pendingServers.get(workspace);
+		if (pending) return pending;
+		const promise = this.startServer(workspace);
+		this.pendingServers.set(workspace, promise);
+		try {
+			return await promise;
+		} finally {
+			this.pendingServers.delete(workspace);
+		}
+	}
+	async startServer(workspace) {
+		const server = createServer(async (req, res) => {
+			try {
+				if (!["GET", "HEAD"].includes(req.method ?? "GET")) {
+					res.writeHead(405).end();
+					return;
+				}
+				const relPath = decodeURIComponent(new URL(req.url ?? "/", "http://127.0.0.1").pathname).replace(/^\/+/, "") || "index.html";
+				if (isPrivateSegment(relPath)) {
+					res.writeHead(404).end();
+					return;
+				}
+				let target = await this.scopedPath(workspace, relPath);
+				if ((await stat(target).catch(() => null))?.isDirectory()) target = await this.scopedPath(workspace, `${relPath.replace(/\/+$/, "")}/index.html`);
+				const fileInfo = await stat(target);
+				if (!fileInfo.isFile()) {
+					res.writeHead(404).end();
+					return;
+				}
+				let start = 0, end = fileInfo.size - 1;
+				const range = req.headers.range;
+				if (range) {
+					const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+					if (!match || !match[1] && !match[2]) {
+						res.writeHead(416, { "content-range": `bytes */${fileInfo.size}` }).end();
+						return;
+					}
+					if (match[1]) {
+						start = Number(match[1]);
+						if (match[2]) end = Math.min(end, Number(match[2]));
+					} else start = Math.max(0, fileInfo.size - Number(match[2]));
+					if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= fileInfo.size) {
+						res.writeHead(416, { "content-range": `bytes */${fileInfo.size}` }).end();
+						return;
+					}
+				}
+				const ext = extname(target).toLowerCase();
+				const isExplorer = basename(target) === "style-explorer.html" || basename(target) === "explorer.html";
+				res.writeHead(range ? 206 : 200, {
+					"accept-ranges": "bytes",
+					"content-length": Math.max(0, end - start + 1),
+					...range ? { "content-range": `bytes ${start}-${end}/${fileInfo.size}` } : {},
+					"content-type": MIME[ext] ?? "application/octet-stream",
+					"cache-control": "no-store",
+					"x-content-type-options": "nosniff",
+					"content-security-policy": isExplorer ? "frame-ancestors 'none'" : "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:; style-src 'self' 'unsafe-inline' https:; img-src 'self' data: blob: https:; font-src 'self' data: https:; media-src 'self' data: blob: https:; connect-src 'self' https:; frame-ancestors 'none'"
+				});
+				if (req.method === "HEAD") res.end();
+				else if (!fileInfo.size) res.end();
+				else await pipeline(createReadStream(target, {
+					start,
+					end
+				}), res);
+			} catch {
+				if (!res.headersSent) res.writeHead(404).end();
+				else res.destroy();
+			}
+		});
+		const listenPort = this.servers.size === 0 ? this.port : 0;
+		await new Promise((done, fail) => {
+			server.once("error", fail);
+			server.listen(listenPort, "127.0.0.1", () => {
+				server.off("error", fail);
+				done();
+			});
+		});
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("Preview server did not bind");
+		const url = `http://127.0.0.1:${address.port}`;
+		this.servers.set(workspace, {
+			server,
+			url
+		});
+		return url;
+	}
+	async explorer(cwd, input = {}) {
+		const workspace = await this.resolveWorkspace(cwd);
+		const embedder = new Embedder(workspace);
+		let manifest = input.manifest;
+		let manifestDir = workspace;
+		let manifestFilePath = null;
+		if (input.manifest !== void 0 && input.inputs !== void 0) throw new Error("Pass either manifest or inputs, not both");
+		const htmlSources = async (files, directory) => {
+			if (!files.length) throw new Error("No candidate HTML files found");
+			manifestDir = directory;
+			manifest = { candidates: files.map((file) => ({ source: relative(directory, file).split(sep).join("/") })) };
+		};
+		const filesInDirectory = async (directory) => {
+			const manifestPath = join(directory, "manifest.json");
+			if (await stat(manifestPath).then((info) => info.isFile()).catch((error) => {
+				if (error.code === "ENOENT") return false;
+				throw error;
+			})) {
+				manifestFilePath = manifestPath;
+				manifestDir = directory;
+				manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+				return;
+			}
+			const files = (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isFile() && [".html", ".htm"].includes(extname(entry.name).toLowerCase()) && entry.name.toLowerCase() !== "style-explorer.html").map((entry) => join(directory, entry.name)).sort();
+			await htmlSources(files, directory);
+		};
+		const onePath = async (path) => {
+			const resolved = await this.scopedPath(workspace, path);
+			const info = await stat(resolved);
+			if (info.isDirectory()) await filesInDirectory(resolved);
+			else if ([".html", ".htm"].includes(extname(resolved).toLowerCase())) await htmlSources([resolved], dirname(resolved));
+			else if (info.isFile()) {
+				manifestFilePath = resolved;
+				manifestDir = dirname(resolved);
+				manifest = JSON.parse(await readFile(resolved, "utf8"));
+			} else throw new Error("Explorer input must be a candidate directory, HTML file, or manifest.json");
+		};
+		if (input.inputs !== void 0) {
+			const requested = (Array.isArray(input.inputs) ? input.inputs : [input.inputs]).map((path) => typeof path === "string" ? path.trim() : path);
+			if (!requested.length || requested.some((path) => typeof path !== "string" || !path.trim())) throw new Error("inputs must contain candidate paths");
+			if (requested.length === 1) await onePath(requested[0]);
+			else {
+				if (requested.some((path) => ![".html", ".htm"].includes(extname(path).toLowerCase()))) throw new Error("Multiple inputs must all be HTML files");
+				const files = await Promise.all(requested.map((path) => this.scopedPath(workspace, path)));
+				if ((await Promise.all(files.map((file) => stat(file)))).some((info) => !info.isFile())) throw new Error("Multiple inputs must all be HTML files");
+				await htmlSources(files, workspace);
+			}
+		} else if (typeof manifest === "string") {
+			const trimmed = manifest.trim();
+			if (trimmed.startsWith("{")) manifest = JSON.parse(trimmed);
+			else await onePath(trimmed);
+		} else if (manifest === void 0) {
+			for (const candidate of [
+				"manifest.json",
+				"directions/manifest.json",
+				"explore/manifest.json"
+			]) try {
+				const p = await this.scopedPath(workspace, candidate);
+				if ((await stat(p)).isFile()) {
+					manifestFilePath = p;
+					manifestDir = dirname(p);
+					manifest = JSON.parse(await readFile(p, "utf8"));
+					break;
+				}
+			} catch {}
+			if (manifest === void 0) {
+				manifest = await defaultManifest({
+					title: input.title?.trim() || basename(workspace) || "Design Exploration",
+					request: input.brief?.trim() || input.request?.trim() || "Compare candidate directions side by side",
+					directory: workspace
+				}, embedder);
+				const firstSource = String(manifest.candidates?.[0]?.source ?? "").replace(/\\/g, "/");
+				if (firstSource.startsWith("directions/")) manifestDir = join(workspace, "directions");
+				else if (firstSource.startsWith("explore/")) manifestDir = join(workspace, "explore");
+			}
+		}
+		const outPath = await this.scopedPath(workspace, input.out ?? "style-explorer.html");
+		await this.safeOutput(dirname(outPath));
+		const active = await resolveActiveSkill({
+			...this.skillOptions,
+			cwd: workspace
+		});
+		const html = await buildExplorer(manifest, workspace, active, manifestDir, outPath, embedder);
+		if (!manifestFilePath) {
+			await this.safeOutput(manifestDir);
+			manifestFilePath = await this.scopedPath(workspace, join(manifestDir, "manifest.json"));
+			await writeFile(manifestFilePath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+		}
+		await writeFile(outPath, html, "utf8");
+		const explorerPath = relative(workspace, outPath).split(sep).join("/");
+		const explorerUrl = `${await this.preview(workspace)}/${explorerPath.split("/").map(encodeURIComponent).join("/")}`;
+		return {
+			ok: true,
+			explorerPath,
+			outputPath: outPath,
+			manifestPath: relative(workspace, manifestFilePath).split(sep).join("/"),
+			explorerUrl,
+			message: "已生成风格对比页 style-explorer.html。"
+		};
+	}
+	validateSizeToken(raw) {
+		const tokens = raw.split(",").map((s) => s.trim()).filter(Boolean);
+		if (!tokens.length) throw new Error("viewport/size must be desktop, mobile, phone, or WIDTHxHEIGHT");
+		for (const token of tokens) {
+			if ([
+				"desktop",
+				"mobile",
+				"phone"
+			].includes(token.toLowerCase())) continue;
+			const m = /^(\d+)[xX](\d+)$/.exec(token);
+			if (!m || ![m[1], m[2]].every((n) => Number(n) > 0 && Number(n) <= 16384)) throw new Error("viewport/size must be desktop, mobile, phone, or WIDTHxHEIGHT (1..16384)");
+		}
+		return tokens.map((token) => token.toLowerCase()).join(",");
+	}
+	async shoot(cwd, input = {}, signal) {
+		const workspace = await this.resolveWorkspace(cwd);
+		const mode = input.mode ?? (input.evidence ? "evidence" : input.compare || input.before ? "compare" : "shot");
+		if (![
+			"shot",
+			"compare",
+			"evidence"
+		].includes(mode)) throw new Error("mode must be shot, compare or evidence");
+		const timeoutMs = timeout(input.timeoutMs, 9e4);
+		const sizeStr = this.validateSizeToken(input.size ?? input.viewport ?? "1440x900");
+		if (input.crop !== void 0 && !input.stitch?.length) throw new Error("crop requires stitch inputs");
+		if (input.waitMs !== void 0 && (!Number.isInteger(input.waitMs) || input.waitMs < 0 || input.waitMs > 12e4)) throw new Error("waitMs must be between 0 and 120000");
+		if (input.holdMs !== void 0 && (!Number.isInteger(input.holdMs) || input.holdMs < 0 || input.holdMs > 12e4)) throw new Error("holdMs must be between 0 and 120000");
+		if (input.selector !== void 0 && (!input.selector.trim() || /[\r\n;]/.test(input.selector))) throw new Error("selector must be a single nonempty selector");
+		const compareRef = input.compare ?? input.before;
+		if (mode === "compare" && !compareRef && !input.stitch?.length) throw new Error("compare requires compare (or before) reference image");
+		const bool = (value) => value !== void 0 && value !== false && value !== "false" && value !== "0" && value !== "";
+		const record = bool(input.record), motion = bool(input.motion);
+		let batchTargets = false;
+		const targets = [];
+		let previewTarget;
+		if (!input.stitch?.length && !(mode === "compare" && compareRef && input.after)) {
+			batchTargets = Array.isArray(input.target);
+			const rawTarget = Array.isArray(input.target) ? input.target : (input.target ?? "index.html").trim();
+			const rawTargets = Array.isArray(rawTarget) ? rawTarget : !/^https?:\/\//i.test(rawTarget) && rawTarget.split(",").every((p) => /\.html?$/i.test(p.trim())) ? rawTarget.split(",") : [rawTarget];
+			if (!rawTargets.length) throw new Error("Provide target HTML file or URL");
+			batchTargets ||= rawTargets.length > 1;
+			for (const target of rawTargets) {
+				const trimmed = target.trim();
+				if (!trimmed) throw new Error("Provide target HTML file or URL");
+				if (/^https?:\/\//i.test(trimmed)) {
+					const url = new URL(trimmed);
+					if (url.username || url.password) throw new Error("Target URL cannot contain credentials");
+					targets.push(trimmed);
+					continue;
+				}
+				const match = /^([^?#]*)(.*)$/.exec(trimmed);
+				const filePart = match?.[1] || "index.html";
+				const suffix = match?.[2] || "";
+				const resolvedTarget = await this.scopedPath(workspace, filePart);
+				const targetStat = await stat(resolvedTarget).catch(() => null);
+				if (!targetStat) throw new Error(`Target file not found: ${filePart}`);
+				if (targetStat.isDirectory()) {
+					const hasManifest = await stat(join(resolvedTarget, "manifest.json")).then(() => true, () => false);
+					const hasIndex = await stat(join(resolvedTarget, "index.html")).then((info) => info.isFile(), () => false);
+					batchTargets ||= hasManifest || !hasIndex;
+				} else batchTargets ||= basename(resolvedTarget).toLowerCase() === "manifest.json";
+				targets.push(`${resolvedTarget}${suffix}`);
+				previewTarget = relative(workspace, targetStat.isDirectory() ? join(resolvedTarget, "index.html") : resolvedTarget).split(sep).map(encodeURIComponent).join("/") + suffix;
+			}
+		}
+		const parsedStates = (() => {
+			if (input.states === void 0) return [];
+			if (Array.isArray(input.states)) return input.states.map((s) => String(s).trim()).filter(Boolean);
+			const raw = String(input.states).trim();
+			if (!raw) return [];
+			if (raw.startsWith("[")) try {
+				const parsed = JSON.parse(raw);
+				if (Array.isArray(parsed)) return parsed.map((s) => String(s).trim()).filter(Boolean);
+			} catch {}
+			return raw.split(",").map((s) => s.trim()).filter(Boolean);
+		})();
+		const multiOutput = batchTargets || mode === "evidence" || input.evidence || sizeStr.includes(",") || parsedStates.length > 1 || record || input.frames !== void 0 || motion || Boolean(input.zoom !== void 0 && String(input.zoom).includes(","));
+		const defaultOut = mode === "evidence" ? "evidence" : multiOutput ? "shots" : "shots/desktop.png";
+		const requestedOut = input.out ?? defaultOut;
+		const outResolved = await this.scopedPath(workspace, requestedOut);
+		const isSinglePngOut = extname(outResolved).toLowerCase() === ".png";
+		if (isSinglePngOut && multiOutput) throw new Error("Multiple screenshots/recordings require a directory out instead of a single PNG");
+		if (isSinglePngOut) {
+			await this.safeOutput(dirname(outResolved));
+			if ((await lstat(outResolved).catch(() => null))?.isSymbolicLink()) throw new Error("Output cannot be a symlink");
+		} else {
+			if (extname(outResolved) !== "") throw new Error("out must be a PNG file path (e.g. shots/desktop.png) or a directory path (e.g. shots)");
+			await this.safeOutput(outResolved);
+		}
+		const runOutDir = isSinglePngOut ? join(dirname(outResolved), `.shoot-tmp-${randomUUID()}`) : outResolved;
+		if (isSinglePngOut) await mkdir(runOutDir, { recursive: true });
+		const localFile = async (p) => {
+			const resolved = await this.scopedPath(workspace, p);
+			if (!(await stat(resolved)).isFile()) throw new Error(`Input must be an existing local file: ${p}`);
+			return resolved;
+		};
+		try {
+			const args = [];
+			if (input.stitch?.length) {
+				for (const item of input.stitch) if (typeof item === "string") args.push("--stitch", await localFile(item));
+				else {
+					args.push("--stitch", await localFile(item.path));
+					if (item.label) args.push("--label", item.label);
+					if (item.matchWidth !== void 0) args.push("--match-width", String(item.matchWidth));
+					if (item.scale !== void 0) args.push("--scale", String(item.scale));
+				}
+				if (input.crop !== void 0) args.push("--crop", input.crop);
+				if (input.dryRun) args.push("--dry-run");
+				if (input.columns !== void 0) args.push("--columns", String(input.columns));
+			} else if (mode === "compare" && compareRef && input.after) {
+				args.push("--stitch", await localFile(compareRef), "--label", "Before", "--stitch", await localFile(input.after), "--label", "After");
+				if (input.columns !== void 0) args.push("--columns", String(input.columns));
+			} else {
+				if (!batchTargets && previewTarget !== void 0) args.push(`${await this.preview(workspace)}/${previewTarget}`);
+				else args.push(...targets);
+				args.push("--size", sizeStr);
+				if (mode === "compare" && compareRef) args.push("--compare", await localFile(compareRef));
+				if (mode === "evidence" || input.evidence) args.push("--evidence");
+				if (parsedStates.length) args.push("--states", parsedStates.join(","));
+				if (input.param) args.push("--param", input.param.trim());
+				if (input.query) args.push("--query", input.query.trim());
+				if (input.zoom !== void 0) {
+					const zoom = Array.isArray(input.zoom) ? input.zoom.join(",") : String(input.zoom);
+					if (zoom.trim()) args.push("--zoom", zoom.trim());
+				}
+				if (input.fullPage) args.push("--full");
+				if (input.thumb) args.push("--thumb");
+				if (input.mask) args.push("--mask");
+				if (input.sheet) args.push("--sheet");
+				if (input.noSheet) args.push("--no-sheet");
+				if (input.mark) args.push("--mark", input.mark);
+				if (input.steps !== void 0) {
+					const stepsList = Array.isArray(input.steps) ? input.steps : [input.steps];
+					for (const stepGroup of stepsList) if (typeof stepGroup === "string" && stepGroup.trim()) args.push("--steps", stepGroup.trim());
+				}
+				if (input.selector) args.push("--selector", input.selector.trim());
+				if (record) args.push("--record");
+				if (input.entry) args.push("--entry");
+				if (input.holdMs !== void 0) args.push("--hold", String(input.holdMs));
+				if (motion) args.push("--motion");
+				if (input.frames !== void 0) args.push("--frames", String(input.frames));
+				if (input.columns !== void 0) args.push("--columns", String(input.columns));
+				if (input.waitMs !== void 0) args.push("--wait", String(input.waitMs));
+				if (input.timeoutScale !== void 0) args.push("--timeout-scale", String(input.timeoutScale));
+				if (input.dryRun) args.push("--dry-run");
+			}
+			args.push("--out", runOutDir);
+			const result = await this.processes.run(await this.script("shoot.mjs", workspace), args, workspace, timeoutMs, signal);
+			if (input.dryRun) return {
+				ok: result.ok,
+				mode,
+				outputFiles: [],
+				domHints: [],
+				stdout: result.stdout,
+				stderr: result.stderr
+			};
+			const generatedRel = await this.collectFiles(runOutDir);
+			const outputFiles = [];
+			let stdout = result.stdout;
+			if (isSinglePngOut) {
+				const fullPaths = generatedRel.map((name) => join(runOutDir, name));
+				const primary = fullPaths.find((p) => /-(?:compare|marked)\.png$/.test(p)) ?? fullPaths.find((p) => basename(p) === "stitch.png") ?? fullPaths.find((p) => p.endsWith(".png"));
+				if (primary) {
+					await copyFile(primary, outResolved);
+					outputFiles.push(outResolved);
+					const stem = outResolved.slice(0, -4);
+					for (const f of fullPaths) {
+						if (f === primary) continue;
+						if (/\.(?:png|webp|jpe?g|mp4|webm|json)$/i.test(f)) {
+							const dest = `${stem}-${basename(f)}`;
+							await copyFile(f, dest);
+							if (/\.(?:png|webp|jpe?g|mp4|webm)$/i.test(dest)) outputFiles.push(dest);
+							if (basename(f) === "report.json") stdout = stdout.replace(/\breport\.json\b/g, basename(dest));
+						}
+					}
+				}
+			} else for (const name of generatedRel) {
+				const full = join(runOutDir, name);
+				if (/\.(?:png|webp|jpe?g|mp4|webm)$/i.test(full)) outputFiles.push(full);
+			}
+			const domHints = stdout.split(/\r?\n/).filter((line) => /默认做法提示|DOM|横向溢出|加载失败|控制台错误|可读性/.test(line));
+			return {
+				ok: result.ok && outputFiles.length > 0,
+				mode,
+				outputFiles,
+				domHints,
+				stdout,
+				stderr: result.stderr,
+				...input.selector ? {
+					selectorMode: "crop",
+					message: "已截取 selector 对应元素的区域。"
+				} : {},
+				...mode === "compare" && input.after || input.stitch?.length ? { comparison: "side-by-side" } : {}
+			};
+		} finally {
+			if (isSinglePngOut) await rm(runOutDir, {
+				recursive: true,
+				force: true
+			}).catch(() => {});
+		}
+	}
+	async media(cwd, input, signal) {
+		const workspace = await this.resolveWorkspace(cwd);
+		const action = input.action ?? (input.refs ? "fetch" : "search_and_fetch");
+		if (![
+			"search",
+			"preview",
+			"fetch",
+			"search_and_fetch"
+		].includes(action)) throw new Error("action must be search, preview, fetch or search_and_fetch");
+		const kind = input.kind ?? "all";
+		if (!KNOWN_KINDS.includes(kind)) throw new Error(`kind must be one of: ${KNOWN_KINDS.join(", ")}`);
+		const limit = input.limit ?? 6;
+		if (!Number.isInteger(limit) || limit < 1 || limit > 30) throw new Error("limit must be between 1 and 30");
+		const use = input.use ?? "page";
+		if (![
+			"page",
+			"reference",
+			"all"
+		].includes(use)) throw new Error("use must be page, reference or all");
+		const sourceList = input.sources === void 0 ? [] : (Array.isArray(input.sources) ? input.sources : input.sources.split(",")).map((s) => s.trim().toLowerCase()).filter(Boolean);
+		const sources = sourceList.length ? sourceList : void 0;
+		const maps = Array.isArray(input.maps) ? input.maps.join(",") : input.maps;
+		if (sources?.some((s) => !KNOWN_SOURCES.includes(s))) throw new Error(`sources must use: ${KNOWN_SOURCES.join(", ")}`);
+		const timeoutMs = timeout(input.timeoutMs, 9e4);
+		const outputDir = await this.scopedPath(workspace, input.dir ?? "assets/media");
+		await this.safeOutput(outputDir);
+		const cache = await this.scopedPath(workspace, ".curate-cache.json", true);
+		for (const name of [
+			"SOURCES.md",
+			"candidates.html",
+			"candidates.png",
+			"sheet.html",
+			"sheet.png"
+		]) await this.scopedPath(workspace, join(outputDir, name));
+		const script = await this.script("curate-media.mjs", workspace);
+		const deadline = Date.now() + timeoutMs;
+		const run = async (args) => {
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) return {
+				result: {
+					ok: false,
+					stdout: "",
+					stderr: "Media operation timed out",
+					timedOut: true,
+					exitCode: null
+				},
+				data: {
+					items: [],
+					files: [],
+					errors: [{ message: "Media operation timed out" }]
+				}
+			};
+			const result = await this.processes.run(script, [
+				...args,
+				"--cache",
+				cache
+			], workspace, remaining, signal);
+			let data;
+			try {
+				const value = JSON.parse(result.stdout);
+				if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected an object");
+				data = value;
+			} catch {
+				data = {
+					items: [],
+					files: [],
+					errors: [{
+						message: "Media script returned invalid JSON",
+						stdout: result.stdout,
+						stderr: result.stderr
+					}]
+				};
+				result.ok = false;
+			}
+			return {
+				result,
+				data
+			};
+		};
+		const normalizeRefs = (allowQuery = false) => {
+			const cleaned = (Array.isArray(input.refs) ? input.refs.join(",") : String(input.refs ?? (allowQuery ? input.query : "") ?? "")).trim();
+			if (!cleaned) throw new Error("refs is required for preview or fetch");
+			return cleaned;
+		};
+		if (action === "preview") {
+			const previewArgs = [
+				"preview",
+				normalizeRefs(true),
+				"--dir",
+				outputDir,
+				...input.sheet !== false ? ["--sheet"] : []
+			];
+			let outFile = null;
+			if (input.out) {
+				outFile = await this.scopedPath(workspace, input.out);
+				await this.safeOutput(dirname(outFile));
+			}
+			const previewed = await run(previewArgs);
+			let sheetPath = typeof previewed.data.sheetImage === "string" ? resolve(outputDir, previewed.data.sheetImage) : null;
+			if (outFile && !sheetPath && previewed.result.ok) throw new Error("Media preview did not produce a sheet to copy");
+			if (outFile && sheetPath && sheetPath !== outFile) {
+				await copyFile(await this.scopedPath(workspace, sheetPath), outFile);
+				sheetPath = outFile;
+			}
+			return {
+				ok: previewed.result.ok,
+				action,
+				outputDir,
+				sheetPath,
+				items: previewed.data.items ?? [],
+				errors: previewed.data.errors ?? [],
+				stderr: previewed.result.stderr
+			};
+		}
+		if (action === "fetch") {
+			const fetchArgs = ["fetch", normalizeRefs()];
+			if (input.out) {
+				const outFile = await this.scopedPath(workspace, input.out);
+				await this.safeOutput(dirname(outFile));
+				await this.scopedPath(workspace, join(dirname(outFile), "SOURCES.md"));
+				fetchArgs.push("--out", outFile);
+			} else fetchArgs.push("--dir", outputDir);
+			if (input.sheet !== false && !input.out) fetchArgs.push("--sheet");
+			if (maps) fetchArgs.push("--maps", maps);
+			if (input.resolution) fetchArgs.push("--resolution", input.resolution);
+			if (input.videoSize) fetchArgs.push("--video-size", input.videoSize);
+			if (input.note) fetchArgs.push("--note", input.note);
+			const fetched = await run(fetchArgs);
+			const downloaded = Array.isArray(fetched.data.files) ? fetched.data.files : [];
+			return {
+				ok: fetched.result.ok,
+				action,
+				count: downloaded.length,
+				outputDir,
+				sheetPath: typeof fetched.data.sheetImage === "string" ? resolve(outputDir, fetched.data.sheetImage) : null,
+				items: downloaded,
+				errors: fetched.data.errors ?? [],
+				stderr: fetched.result.stderr
+			};
+		}
+		if (typeof input.query !== "string" || !input.query.trim() || input.query.trim().startsWith("-")) throw new Error("query must be nonempty search terms");
+		const searchArgs = [
+			"search",
+			input.query.trim(),
+			"--kind",
+			kind,
+			"--dir",
+			outputDir,
+			"--use",
+			use === "page" ? "page" : "all",
+			"--limit",
+			String(sources || use === "reference" ? 30 : limit)
+		];
+		if (input.refresh) searchArgs.push("--refresh");
+		if (action === "search" && input.sheet) searchArgs.push("--sheet");
+		const search = await run(searchArgs);
+		let items = Array.isArray(search.data.items) ? search.data.items : [];
+		items = items.filter((item) => (use !== "reference" || item.use === "reference") && (!sources || sources.includes(String(item.provider).toLowerCase()))).slice(0, limit);
+		if (action === "search" || !items.length) return {
+			ok: search.result.ok,
+			action,
+			count: items.length,
+			outputDir,
+			sheetPath: typeof search.data.sheetImage === "string" ? resolve(outputDir, search.data.sheetImage) : null,
+			items,
+			errors: search.data.errors ?? [],
+			stderr: search.result.stderr
+		};
+		const refs = items.map((item) => String(item.ref ?? item.id));
+		if (refs.some((ref) => !/^[A-Z]\d+$/.test(ref))) throw new Error("Media script returned invalid asset references");
+		const fetchArgs = [
+			"fetch",
+			refs.join(","),
+			"--dir",
+			outputDir
+		];
+		if (input.sheet !== false) fetchArgs.push("--sheet");
+		if (maps) fetchArgs.push("--maps", maps);
+		if (input.resolution) fetchArgs.push("--resolution", input.resolution);
+		if (input.videoSize) fetchArgs.push("--video-size", input.videoSize);
+		const fetched = await run(fetchArgs);
+		const downloaded = Array.isArray(fetched.data.files) ? fetched.data.files : [];
+		let sheetPath = null;
+		if (typeof fetched.data.sheetImage === "string") {
+			const rawSheet = resolve(outputDir, fetched.data.sheetImage);
+			const targetSheet = await this.scopedPath(workspace, input.out ?? "shots/media-sheet.png");
+			await this.safeOutput(dirname(targetSheet));
+			await copyFile(rawSheet, targetSheet);
+			sheetPath = targetSheet;
+		}
+		return {
+			ok: search.result.ok && fetched.result.ok,
+			action,
+			count: downloaded.length,
+			outputDir,
+			sheetPath,
+			items: downloaded.map((item) => ({
+				...items.find((source) => source.ref === item.ref),
+				...item
+			})),
+			errors: fetched.data.errors ?? [],
+			stderr: [search.result.stderr, fetched.result.stderr].filter(Boolean).join("\n")
+		};
+	}
+	async image(cwd, input, signal) {
+		return generateImage(await this.resolveWorkspace(cwd), input, {
+			skillOptions: this.skillOptions,
+			processes: this.processes,
+			scopedPath: (root, inputPath) => this.scopedPath(root, inputPath),
+			safeOutput: (directory) => this.safeOutput(directory)
+		}, signal);
+	}
+	async dispose() {
+		this.disposed = true;
+		await this.processes.dispose();
+		await Promise.all([...this.pendingServers.values()].map((p) => p.catch(() => void 0)));
+		const activeServers = [...this.servers.values()];
+		this.servers.clear();
+		await Promise.all(activeServers.map(({ server }) => new Promise((done, fail) => {
+			server.close((error) => error ? fail(error) : done());
+			server.closeAllConnections();
+		})));
+	}
+};
+//#endregion
+//#region src/tools/schemas.ts
+const stringOrStrings = { oneOf: [{ type: "string" }, {
+	type: "array",
+	items: { type: "string" }
+}] };
+const boolOrString = { oneOf: [{ type: "boolean" }, {
+	type: "string",
+	enum: [
+		"true",
+		"false",
+		"0",
+		"1"
+	]
+}] };
+const viewportSchema = { oneOf: [{ type: "string" }, {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		width: {
+			type: "integer",
+			required: true,
+			description: "视口宽度。"
+		},
+		height: {
+			type: "integer",
+			required: true,
+			description: "视口高度。"
+		}
+	}
+}] };
+const manifestSchema = { oneOf: [{ type: "string" }, {
+	type: "object",
+	additionalProperties: false,
+	properties: {
+		schemaVersion: {
+			type: "integer",
+			const: 1,
+			description: "清单版本，省略时按 1。"
+		},
+		project: {
+			type: "string",
+			description: "项目名称；省略时不显示。"
+		},
+		brief: {
+			type: "string",
+			description: "设计需求；省略时不显示。"
+		},
+		candidates: {
+			type: "array",
+			required: true,
+			description: "候选方向数组。",
+			items: {
+				type: "object",
+				additionalProperties: false,
+				properties: {
+					id: {
+						type: "string",
+						description: "唯一方向编号；省略时自动生成。"
+					},
+					name: {
+						type: "string",
+						description: "方向名称；省略时取 HTML 的 title，再取文件名。"
+					},
+					concept: {
+						type: "string",
+						description: "设计概念；省略时不显示。"
+					},
+					typography: {
+						type: "string",
+						description: "字体方案；省略时不显示。"
+					},
+					traits: {
+						type: "array",
+						items: { type: "string" },
+						description: "方向特征；省略时不显示。"
+					},
+					palette: {
+						type: "array",
+						items: { type: "string" },
+						description: "十六进制配色；省略时不显示。"
+					},
+					kind: {
+						type: "string",
+						enum: [
+							"html",
+							"image",
+							"url"
+						],
+						description: "候选内容类型。"
+					},
+					source: {
+						type: "string",
+						description: "本地候选路径或本地服务 URL。"
+					},
+					url: {
+						type: "string",
+						description: "本地服务 URL，作为 source 的别名。"
+					},
+					baseline: {
+						type: "boolean",
+						description: "是否为基准方向。"
+					},
+					interactive: {
+						type: "boolean",
+						description: "是否允许 HTML 候选交互。"
+					},
+					nativeViewport: {
+						...viewportSchema,
+						description: "候选原始视口。"
+					}
+				}
+			}
+		},
+		round: {
+			type: "string",
+			description: "探索轮次；省略时选择文案不显示轮次。"
+		},
+		lang: {
+			type: "string",
+			enum: ["zh", "en"],
+			description: "界面语言。"
+		},
+		nativeViewport: {
+			...viewportSchema,
+			description: "共享原始视口。"
+		},
+		serve: {
+			type: "object",
+			additionalProperties: false,
+			description: "本地服务信息。",
+			properties: {
+				command: {
+					type: "string",
+					required: true,
+					description: "启动命令。"
+				},
+				cwd: {
+					type: "string",
+					description: "绝对工作目录。"
+				},
+				url: {
+					type: "string",
+					description: "本地服务地址。"
+				}
+			}
+		}
+	}
+}] };
+//#endregion
+//#region src/tools/index.ts
+function sessionCwd(exec, fallback) {
+	if (!exec.agent) throw new Error("Oil UI requires a session-owned agent execution");
+	const cwd = exec.agent.session.header.cwd?.trim() || fallback?.trim();
+	if (!cwd) throw new Error("Oil UI requires a session working directory");
+	return cwd;
+}
+function json(value) {
+	return JSON.parse(JSON.stringify(value));
+}
+const nativeOutput = {
+	schema: { type: "json" },
+	render: (_args, value) => [{
+		type: "text",
+		text: JSON.stringify(value)
+	}]
+};
+function registerTools(ctx, options) {
+	const { config, workbench, reportStatus } = options;
+	ctx.inject(["tools", "skills"], (ctx) => {
+		options.onSkills(ctx.skills);
+		ctx.tools.register(defineTool({
+			name: "oil_ui_skill_status",
+			isConcurrencySafe: (args) => !Boolean(args && typeof args === "object" && args.update),
+			description: "核对当前 Agent 实际生效 Skill 的原文、版本和资源目录，返回更新状态、生图来源（image-gen / oiloil / 无）及 oiloil 登录余额。宿主状态优先于脚本探测。仅在用户明确要求时传 update=true：filesystem 安装版用 oil-cli 更新，内置版只提示更新插件。",
+			parameters: { update: {
+				type: "boolean",
+				description: "仅在用户明确要求时更新 filesystem 安装版；内置版提示更新插件，不写入安装目录。"
+			} },
+			presentCall: (args) => ({
+				card: "generic",
+				title: args.update ? "更新 Oil UI Skill" : "查看 Oil UI Skill 状态",
+				kind: "read"
+			}),
+			output: nativeOutput,
+			execute: async (args, exec) => {
+				return json(await reportStatus(ctx, exec.agent, Boolean(args?.update)));
+			}
+		}));
+		ctx.tools.register(defineTool({
+			name: "oil_ui_explorer",
+			description: "从 manifest.json、候选目录或多个 HTML 文件生成内嵌全部本地资源的独立单文件风格对比页 style-explorer.html，并返回预览地址。",
+			parameters: {
+				manifest: {
+					...manifestSchema,
+					description: "可选的对比页清单对象、JSON 字符串或工作区内路径；路径也可指向候选目录或单个 HTML 文件。目录内有 manifest.json 时优先读取。"
+				},
+				inputs: {
+					...stringOrStrings,
+					description: "可选的候选目录或 HTML 文件路径数组；多个输入必须全部是 HTML。目录内有 manifest.json 时优先读取。"
+				},
+				out: {
+					type: "string",
+					description: "对比页 HTML 输出路径，默认 style-explorer.html。"
+				},
+				title: {
+					type: "string",
+					description: "对比页标题。"
+				},
+				brief: {
+					type: "string",
+					description: "设计需求摘要。"
+				},
+				request: {
+					type: "string",
+					description: "设计需求，作为 brief 的别名。"
+				}
+			},
+			presentCall: (args) => ({
+				card: "generic",
+				title: "生成风格对比页",
+				kind: "edit",
+				locations: [{ path: args.out || "style-explorer.html" }]
+			}),
+			output: nativeOutput,
+			execute: async (args, exec) => json(await workbench.explorer(sessionCwd(exec, config.workspaceRoot), args))
+		}));
+		ctx.tools.register(defineTool({
+			name: "oil_ui_shoot",
+			timeoutMs: 905e3,
+			description: "对本地 HTML、候选目录（如 explore）或页面地址执行截图、半尺寸快速缩略图、多目标批量截图与自动并排图（sheet.png）、局部元素裁剪（selector）、交互状态序列、录屏取证或像素比对。本地 HTML 自动以工作区根目录启动静态服务，支持 ../assets/ 等相对路径。",
+			parameters: {
+				target: {
+					...stringOrStrings,
+					description: "本地 HTML 文件、候选目录（如 explore）、manifest.json、HTTP(S) 地址，或多目标数组/逗号分隔路径。"
+				},
+				out: {
+					type: "string",
+					description: "工作区内输出 PNG 文件或目录路径；多状态连拍、多尺寸、证据集与录屏须传目录。"
+				},
+				mode: {
+					type: "string",
+					enum: [
+						"shot",
+						"compare",
+						"evidence"
+					],
+					description: "执行模式：shot（单图/多图）、compare（像素比对）、evidence（交付证据集）。"
+				},
+				before: {
+					type: "string",
+					description: "比较前的本地图像路径，作为 compare 的别名。"
+				},
+				after: {
+					type: "string",
+					description: "比较后的本地图像路径；传入后生成并排对比。"
+				},
+				compare: {
+					type: "string",
+					description: "用于像素比较的本地参考图路径。"
+				},
+				size: {
+					type: "string",
+					description: "视口尺寸或预设，默认 1440x900；支持 desktop、mobile、1440x900，可逗号分隔多个尺寸。"
+				},
+				viewport: {
+					type: "string",
+					description: "截图视口尺寸，作为 size 的别名。"
+				},
+				states: {
+					...stringOrStrings,
+					description: "状态名称数组或逗号分隔字符串，通过地址参数打开。"
+				},
+				param: {
+					type: "string",
+					description: "状态地址参数名，默认 state。"
+				},
+				query: {
+					type: "string",
+					description: "附加到页面地址的额外查询参数（如 theme=dark&lang=zh）。"
+				},
+				zoom: {
+					oneOf: [
+						{ type: "number" },
+						{ type: "string" },
+						{
+							type: "array",
+							items: { oneOf: [{ type: "number" }, { type: "string" }] }
+						}
+					],
+					description: "截图像素倍数，可传数值、逗号分隔字符串或倍数数组。"
+				},
+				fullPage: {
+					type: "boolean",
+					description: "是否截取整个页面。"
+				},
+				thumb: {
+					type: "boolean",
+					description: "快速缩略图：按 0.5 倍分辨率截视口，缩短等待并跳过默认做法检查。"
+				},
+				mask: {
+					type: "boolean",
+					description: "是否生成遮字图。"
+				},
+				sheet: {
+					type: "boolean",
+					description: "是否生成联系表。"
+				},
+				noSheet: {
+					type: "boolean",
+					description: "多目标批量截图时不自动生成 sheet.png。"
+				},
+				mark: {
+					type: "string",
+					description: "截图标注规则，如 1=.open。"
+				},
+				selector: {
+					type: "string",
+					description: "只截取匹配元素的区域，自动滚入视口；不与 fullPage、record、frames、motion、entry、evidence 同用。"
+				},
+				steps: {
+					...stringOrStrings,
+					description: "交互动作字符串，例如 \"click #open; wait 300\"。也可传真实字符串数组，每项为独立动作组（重新打开页面），组内用分号分隔；不要将 JSON 数组编码成字符串。"
+				},
+				record: {
+					...boolOrString,
+					description: "是否录屏，兼容字符串 true/false。"
+				},
+				entry: {
+					type: "boolean",
+					description: "是否在打开页面前开始录屏。"
+				},
+				holdMs: {
+					type: "integer",
+					description: "交互后的停留时长，单位毫秒，范围 0–120000。"
+				},
+				motion: {
+					...boolOrString,
+					description: "是否探测动效，兼容字符串 true/false。"
+				},
+				evidence: {
+					type: "boolean",
+					description: "是否生成整套证据；配合 frames 用序列图代替视频。"
+				},
+				stitch: {
+					type: "array",
+					items: { oneOf: [{ type: "string" }, {
+						type: "object",
+						additionalProperties: false,
+						properties: {
+							path: {
+								type: "string",
+								required: true,
+								description: "本地图像路径。"
+							},
+							label: {
+								type: "string",
+								description: "图像标签。"
+							},
+							matchWidth: {
+								oneOf: [{ type: "number" }, { type: "string" }],
+								description: "共有元素在原图里的像素宽；使用时每张都填，不与 scale 混用。"
+							},
+							scale: {
+								oneOf: [{ type: "number" }, { type: "string" }],
+								description: "该图缩放比例，支持 0.8、80% 或 4/5。"
+							}
+						}
+					}] },
+					description: "拼图输入，每项是本地图像路径或含 path、label、matchWidth 或 scale 的对象。"
+				},
+				crop: {
+					type: "string",
+					description: "拼图统一比例后裁切的公共区域，格式 x,y,width,height。"
+				},
+				columns: {
+					type: "integer",
+					description: "拼图或录屏帧序列的列数。"
+				},
+				frames: {
+					oneOf: [{ type: "integer" }, { type: "string" }],
+					description: "动效序列图帧数，范围 2–120；仅加 record 时同时编码视频。"
+				},
+				waitMs: {
+					type: "integer",
+					description: "截图前等待时长，单位毫秒，范围 0–120000。"
+				},
+				timeoutScale: {
+					type: "number",
+					description: "截图引擎内部超时倍数。"
+				},
+				dryRun: {
+					type: "boolean",
+					description: "仅验证截图参数，不启动截图。"
+				},
+				timeoutMs: {
+					type: "integer",
+					description: "工具总超时时长，单位毫秒，最大 900000。"
+				}
+			},
+			presentCall: (args) => ({
+				card: "generic",
+				title: "截图与交互取证",
+				kind: "execute",
+				locations: [{ path: (Array.isArray(args.target) ? args.target[0] : args.target) || "index.html" }, ...args.out ? [{ path: args.out }] : []]
+			}),
+			output: nativeOutput,
+			execute: async (args, exec) => json(await workbench.shoot(sessionCwd(exec, config.workspaceRoot), args, exec.signal))
+		}));
+		ctx.tools.register(defineTool({
+			name: "oil_ui_media",
+			timeoutMs: 905e3,
+			isConcurrencySafe: (args) => Boolean(args && typeof args === "object" && args.action === "search" && !args.out),
+			description: "从博物馆馆藏、开放版权图库、科学版画、NASA 视频和 3D/PBR 材质库检索真实素材，生成带编号的候选联系表预览，并将选中的素材下载到当前工作目录（自动记录 SOURCES.md 署名与许可信息）。",
+			parameters: {
+				action: {
+					type: "string",
+					enum: [
+						"search",
+						"preview",
+						"fetch",
+						"search_and_fetch"
+					],
+					description: "素材操作，默认搜索并下载；传 refs 时默认下载。"
+				},
+				query: {
+					type: "string",
+					description: "搜索关键词；支持用 | 分隔多个备选词（如 \"oak planks | belgian oak\"）。"
+				},
+				refs: {
+					...stringOrStrings,
+					description: "缓存候选编号（如 C1、T2）或直接下载的素材 URL，支持逗号分隔字符串或数组。"
+				},
+				dir: {
+					type: "string",
+					description: "素材输出目录，默认 assets/media。"
+				},
+				out: {
+					type: "string",
+					description: "单文件 URL 下载时的输出路径（如 assets/photo.jpg），不可覆盖已有文件。"
+				},
+				kind: {
+					type: "string",
+					enum: [
+						"all",
+						"texture",
+						"design",
+						"photo",
+						"blueprint",
+						"map",
+						"plate",
+						"science",
+						"video"
+					],
+					description: "素材类别。"
+				},
+				use: {
+					type: "string",
+					enum: [
+						"page",
+						"reference",
+						"all"
+					],
+					description: "素材用途：页面使用、仅供参考或全部。"
+				},
+				limit: {
+					type: "integer",
+					description: "最多返回的候选数，范围 1–30。"
+				},
+				sources: {
+					...stringOrStrings,
+					description: "按来源筛选，支持来源名称数组或逗号分隔字符串。"
+				},
+				sheet: {
+					type: "boolean",
+					description: "是否生成候选或已下载素材的联系表 PNG。"
+				},
+				maps: {
+					...stringOrStrings,
+					description: "贴图通道，支持 diffuse、roughness、normal、all 或通道数组。"
+				},
+				resolution: {
+					type: "string",
+					description: "贴图分辨率，如 1k。"
+				},
+				videoSize: {
+					type: "string",
+					description: "视频版本，如 medium、small、preview、orig。"
+				},
+				note: {
+					type: "string",
+					description: "下载素材的来源或用途说明。"
+				},
+				refresh: {
+					type: "boolean",
+					description: "是否忽略搜索缓存重新搜索。"
+				},
+				timeoutMs: {
+					type: "integer",
+					description: "工具总超时时长，单位毫秒，最大 900000。"
+				}
+			},
+			presentCall: (args) => {
+				const action = args.action ?? (args.refs ? "fetch" : "search_and_fetch");
+				return {
+					card: "generic",
+					title: {
+						search: "搜索素材",
+						preview: "预览素材候选",
+						fetch: "下载素材",
+						search_and_fetch: "搜索并下载素材"
+					}[action],
+					kind: action === "search" ? "search" : action === "preview" ? "read" : "fetch",
+					locations: [{ path: args.out || args.dir || "assets/media" }]
+				};
+			},
+			output: nativeOutput,
+			execute: async (args, exec) => json(await workbench.media(sessionCwd(exec, config.workspaceRoot), args, exec.signal))
+		}));
+		ctx.tools.register(defineTool({
+			name: "oil_ui_image",
+			timeoutMs: 905e3,
+			description: "优先调用本机 image-gen；不可用时使用 oiloil 生图。可指定分辨率，在当前工作目录生成图片（mode=generate）或基于参考图编辑（mode=edit）。oiloil 返回其他图片格式时会按实际格式保存并返回实际路径。",
+			parameters: {
+				prompt: {
+					type: "string",
+					required: true,
+					description: "生成或编辑图片的提示词描述。"
+				},
+				mode: {
+					type: "string",
+					enum: ["generate", "edit"],
+					description: "生图模式：generate（文生图）或 edit（基于参考图改图/派生变体，传入 images 时默认 edit）。"
+				},
+				out: {
+					type: "string",
+					description: "生成或编辑后的图片输出路径，默认 assets/generated.png。"
+				},
+				images: {
+					type: "array",
+					items: { type: "string" },
+					description: "工作区内的参考图路径；本机 image-gen 支持 1–16 张，oiloil 支持 1 张。"
+				},
+				size: {
+					type: "string",
+					description: "图片分辨率，可传 1K、2K、4K 或宽x高尺寸；本机 image-gen 也支持 auto。"
+				},
+				background: {
+					type: "string",
+					enum: [
+						"auto",
+						"opaque",
+						"transparent"
+					],
+					description: "图片背景类型；透明底抠图素材选 transparent。"
+				},
+				model: {
+					type: "string",
+					description: "可选的图片模型标识。"
+				},
+				force: {
+					type: "boolean",
+					description: "是否允许覆盖已有输出文件，默认 false（默认路径重名时自动递增文件名避让）。"
+				},
+				timeoutMs: {
+					type: "integer",
+					description: "工具总超时时长，单位毫秒，最大 900000。"
+				}
+			},
+			presentCall: (args) => ({
+				card: "generic",
+				title: (args.mode ?? (args.images?.length ? "edit" : "generate")) === "edit" ? "编辑图片" : "生成图片",
+				kind: "edit",
+				locations: [{ path: args.out || "assets/generated.png" }]
+			}),
+			output: nativeOutput,
+			execute: async (args, exec) => json(await workbench.image(sessionCwd(exec, config.workspaceRoot), args, exec.signal))
+		}));
+	});
+}
+//#endregion
+//#region src/index.ts
+const name = "dsh-oil-ui";
+const MAIN_AGENT_SYSTEM_PROMPT = "For UI tasks, call oil_ui_skill_status first for the effective Skill, version, update notice, and image source. Use this host status tool instead of running check_update.sh or check_update.py. When skillReady is true, load activeSkillName with the native skill tool: oil-ui and oil-ui-pro both work unchanged, regardless of their publisher. Report skillLoadWarning when present. Follow references/tools.md host-tools section: use oil_ui_explorer for comparison pages, oil_ui_shoot for screenshots/interactions/recordings, oil_ui_media for media search/preview/fetch, and oil_ui_image for generating or editing images; map CLI flags such as --stitch and --frames to the matching tool fields. Use status.imageSource and oilBalance instead of invoking the image script to detect availability. Bundled Skill updates require updating the plugin; filesystem installations use oil-cli. Read and write project files directly in the current working directory. Review subagents receive the effective original reviewer manual in their system prompt; they do not need to reload it. Use read_image to inspect screenshots.";
+function buildSubagentSystemPrompt(reviewerManual, referencesPath) {
+	return [
+		"当主 Agent 委派你执行界面视觉或交互评审（UI/UX Review）时，请直接按下方已内置的《视觉与交互评审手册》（`references/reviewer-manual.md`）执行，无需调用 `read_file`、`skill` 或 `oil_ui_skill_status` 重复读取该手册，评审过程中只提供客观评审意见、不修改项目文件。查看图片请用 `read_image`；需要补充 480px/180px 缩略图、遮字图（`mask: true`）或实际操作验证时请用 `oil_ui_shoot`。（若主 Agent 委派的是非评审类的常规子任务，则直接按主 Agent 的任务指令执行。）",
+		...referencesPath ? [`当前生效 Skill 的 references/ 绝对路径：${referencesPath}。仅当主 Agent 明确指派轻量 UX 走查、多方向/流程专项或游玩类评审时，才按指令读取对应文件（如 ${referencesPath}/ux-reviewer.md、${referencesPath}/review-modes.md 或 ${referencesPath}/play-craft.md），常规单页视觉评审无需额外读取。`] : [],
+		"",
+		reviewerManual.trim()
+	].join("\n");
+}
+function apply(ctx, config) {
+	const workbench = new DesignWorkbench(config.workspaceRoot, config.previewPort, config);
+	ctx.effect(() => () => workbench.dispose());
+	let invalidateSkills;
+	let skillsRegistry;
+	const reportStatus = async (skillsCtx, scope, update) => {
+		const cwd = scope?.session.header.cwd;
+		const snapshot = await discoverSkill({
+			...config,
+			cwd
+		});
+		const getVisible = async () => await skillsCtx.skills.get("oil-ui-pro", {
+			scope,
+			cwd
+		}) ?? await skillsCtx.skills.get("oil-ui", {
+			scope,
+			cwd
+		});
+		return skillStatus(await getVisible(), {
+			...config,
+			cwd,
+			update
+		}, snapshot, async () => {
+			invalidateSkills?.();
+			return getVisible();
+		});
+	};
+	registerTools(ctx, {
+		config,
+		workbench,
+		reportStatus,
+		onSkills: (registry) => {
+			skillsRegistry ??= registry;
+		}
+	});
+	ctx.inject(["skills"], async (ctx) => {
+		skillsRegistry = ctx.skills;
+		if (config.bundledSkill === false) return;
+		if (typeof ctx.skills.registerProvider === "function") ctx.skills.registerProvider((control) => {
+			invalidateSkills = () => control.invalidate?.();
+			return createSkillProvider({
+				...config,
+				preferPro: false
+			}, control);
+		});
+		else ctx.skills.register(await loadUpstreamSkill({
+			...config,
+			preferPro: false
+		}));
+	});
+	ctx.inject(["commands", "skills"], (ctx) => {
+		skillsRegistry ??= ctx.skills;
+		if (!ctx.commands || typeof ctx.commands.register !== "function") return;
+		ctx.effect(() => {
+			const disposeStatus = ctx.commands.register({
+				name: "oil-ui-status",
+				description: "查看当前生效版本、更新状态、生图来源与 oiloil 余额（传入 update 可直接更新）",
+				input: { hint: "[update]" },
+				handler: async (invocation) => {
+					const arg = invocation.rawInput.trim().toLowerCase();
+					if (arg.length > 0 && arg !== "update") return {
+						kind: "error",
+						text: "用法：/oil-ui-status [update]"
+					};
+					const status = await reportStatus(ctx, invocation.agent, arg === "update");
+					return {
+						kind: "success",
+						text: [
+							`模型可见 Skill：${status.effective ? `${status.activeSkillName}（${status.edition === "pro" ? "Pro" : "Lite"}）v${status.activeVersion}` : "未找到"}`,
+							...status.skillLoadWarning ? [`注意：${status.skillLoadWarning}`] : [],
+							`最新版本：${status.latestVersion ?? status.activeVersion}${status.updateAvailable ? "（有新版本可用，更新方式见下方提示）" : ""}`,
+							`本地 Pro：${status.proInstalled ? `已检测到（${status.proSourcePath}）` : "未安装"}`,
+							`本地生图（image-gen）：${status.imageGenAvailable ? `可用（${status.imageGenScriptPath}）` : "未检测到"}`,
+							`生图来源：${status.imageSource === "image-gen" ? "image-gen" : status.imageSource === "oiloil" ? "oiloil" : "无"}`,
+							...status.oilLoggedIn ? [`oiloil 余额：${status.oilBalance === null ? "暂时无法查询" : `${status.oilBalance} 积分`}`] : [],
+							...status.updateCheckError ? [`版本检查异常：${status.updateCheckError}`] : [],
+							...status.updateNotice ? [status.updateNotice] : []
+						].join("\n")
+					};
+				}
+			});
+			const disposeExplore = ctx.commands.register({
+				name: "oil-ui-explore",
+				description: "探索 3 个不同设计方向并生成 style-explorer.html 同屏对比页",
+				input: {
+					hint: "<设计需求或目标页面>",
+					attachments: true
+				},
+				handler: (invocation) => {
+					const brief = invocation.rawInput.trim();
+					if (brief.length === 0 && invocation.attachments.length === 0) return {
+						kind: "error",
+						text: "用法：/oil-ui-explore <设计需求或目标页面>"
+					};
+					const prompt = [
+						"Call oil_ui_skill_status first. When skillReady is true, load its activeSkillName (oil-ui-pro or oil-ui) unchanged with the skill tool; report skillLoadWarning when present.",
+						"Explore 3 genuinely distinct design directions in explore/a.html, explore/b.html, and explore/c.html, package them into style-explorer.html with oil_ui_explorer, and inspect the comparison page and cards with oil_ui_shoot.",
+						...brief ? ["", `Design brief: ${brief}`] : []
+					].join("\n");
+					invocation.agent.followup(createUserMessage({
+						content: [...invocation.attachments, {
+							type: "text",
+							text: prompt
+						}],
+						source: { kind: "user" }
+					}));
+					return {
+						kind: "success",
+						text: "已发起 Oil UI 三方向设计探索。"
+					};
+				}
+			});
+			const disposeReview = ctx.commands.register({
+				name: "oil-ui-review",
+				description: "截取真实页面画面，执行视觉层级与交互可用性双轨走查",
+				input: {
+					hint: "[文件、URL 或评审重点]",
+					attachments: true
+				},
+				handler: (invocation) => {
+					const target = invocation.rawInput.trim();
+					const prompt = [
+						"Call oil_ui_skill_status first. When skillReady is true, load its activeSkillName (oil-ui-pro or oil-ui) unchanged with the skill tool; report skillLoadWarning when present.",
+						"Capture desktop and mobile screenshots and key interactive states with oil_ui_shoot, then conduct a two-track UI/UX review covering visual hierarchy/craft and usability/task flow.",
+						...target ? ["", `Review target: ${target}`] : []
+					].join("\n");
+					invocation.agent.followup(createUserMessage({
+						content: [...invocation.attachments, {
+							type: "text",
+							text: prompt
+						}],
+						source: { kind: "user" }
+					}));
+					return {
+						kind: "success",
+						text: "已发起 Oil UI 双轨 UI/UX 走查。"
+					};
+				}
+			});
+			return () => {
+				disposeStatus?.();
+				disposeExplore?.();
+				disposeReview?.();
+			};
+		});
+	});
+	const installed = /* @__PURE__ */ new WeakSet();
+	const reviewerDisposers = /* @__PURE__ */ new Set();
+	let disposed = false;
+	ctx.effect(() => () => {
+		disposed = true;
+		for (const dispose of reviewerDisposers) dispose();
+		reviewerDisposers.clear();
+	});
+	const installSubagentPrompt = async (agent) => {
+		if (disposed || installed.has(agent) || agent.session?.header?.origin !== "subagent") return;
+		if (!agent.ctx?.systemPrompt || typeof agent.ctx.systemPrompt.section !== "function") return;
+		installed.add(agent);
+		try {
+			const options = {
+				...config,
+				cwd: agent.session.header.cwd
+			};
+			let active = {
+				edition: "lite",
+				name: "oil-ui",
+				directory: bundledSkillDirectory,
+				source: "bundled-lite"
+			};
+			let referencesPath = join(bundledSkillDirectory, "references");
+			try {
+				const effective = await skillsRegistry?.get("oil-ui-pro", {
+					scope: agent,
+					cwd: options.cwd
+				}) ?? await skillsRegistry?.get("oil-ui", {
+					scope: agent,
+					cwd: options.cwd
+				});
+				if (await matchesNativeSkill(effective)) {
+					active = {
+						edition: effective.name === "oil-ui-pro" ? "pro" : "lite",
+						name: effective.name,
+						directory: effective.resourceBase.path,
+						source: "filesystem"
+					};
+					referencesPath = join(active.directory, "references");
+				}
+			} catch {}
+			const manual = await loadReviewerManual(options, active);
+			if (!manual || disposed) return;
+			const dispose = agent.ctx.systemPrompt.section({
+				name: "oil-ui-subagent-reviewer",
+				order: 71,
+				interpolate: false,
+				text: buildSubagentSystemPrompt(manual, referencesPath)
+			});
+			if (typeof dispose === "function") {
+				const cleanup = () => {
+					if (reviewerDisposers.delete(cleanup)) dispose();
+				};
+				reviewerDisposers.add(cleanup);
+				agent.ctx.effect?.(() => cleanup);
+			}
+		} catch {
+			installed.delete(agent);
+		}
+	};
+	ctx.inject(["systemPrompt", "agents"], (ctx) => {
+		ctx.effect(() => {
+			const dispose = ctx.systemPrompt.section({
+				name: "oil-ui",
+				order: 70,
+				interpolate: false,
+				text: MAIN_AGENT_SYSTEM_PROMPT
+			});
+			return () => {
+				if (typeof dispose === "function") dispose();
+			};
+		});
+		for (const agent of ctx.agents?.list?.() ?? []) installSubagentPrompt(agent);
+		ctx.on?.("agent/created", ({ agent }) => {
+			installSubagentPrompt(agent);
+		});
+	});
+}
+//#endregion
+export { Config, MAIN_AGENT_SYSTEM_PROMPT, apply, buildSubagentSystemPrompt, name };

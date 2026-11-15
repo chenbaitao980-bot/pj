@@ -1,0 +1,106 @@
+{
+  "name": "dsh-oil-ui",
+  "version": "0.4.13",
+  "description": "Oil UI 的 DeepSeek Harness 原生工具与 Skill 加载诊断插件",
+  "license": "MIT",
+  "author": "oil-oil",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oil-oil/dsh-oil-ui.git"
+  },
+  "homepage": "https://github.com/oil-oil/dsh-oil-ui#readme",
+  "bugs": {
+    "url": "https://github.com/oil-oil/dsh-oil-ui/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "oil-ui",
+    "ui-design"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "README.en.md",
+    "assets/readme",
+    "cordis.patch.yml",
+    "lib",
+    "skills/oil-ui",
+    "skills/oil-ui.manifest.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test && pnpm verify:generated",
+    "verify:generated": "node scripts/verify-generated.mjs",
+    "pack:plugin": "node scripts/package-plugin.mjs",
+    "release:check": "pnpm check && pnpm pack:plugin && node scripts/release-check.mjs",
+    "sync:skill": "node scripts/vendor-oil-ui.mjs",
+    "vendor:skill": "pnpm sync:skill",
+    "smoke:dsh": "node scripts/smoke-dsh.mjs",
+    "test:sync-workflow": "node scripts/smoke-sync-skill.mjs",
+    "smoke:install": "node scripts/smoke-dsh.mjs --install"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-agent": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-session": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-skill": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.0-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-tools": ">=0.2.0-rc.2 <0.3.0-0"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.4",
+    "acorn": "8.19.0",
+    "parse5": "^8.0.1",
+    "postcss": "^8.5.30",
+    "postcss-value-parser": "^4.2.0",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-agent": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-fs": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sandbox": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-scope": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-session-projection": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-skill": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-user-approval": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-working-directory": "0.2.2-rc.1",
+    "@types/node": "^22.20.1",
+    "prettier": "^3.9.10",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22.19.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  },
+  "packageManager": "pnpm@10.16.1"
+}
