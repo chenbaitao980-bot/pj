@@ -1,7 +1,7 @@
 ---
 name: huatu
 description: 用自然语言操作本机运筹蛊（含思维导图模式、边界/概要/关系线/主题信息和 Markdown/OPML/XMind 格式互通）：新建或修改本地画布、专业图形、笔迹绘制、资源图标、个人组件和建模表，控制绘图/资源/图形/建模面板。适用于本地出图、美化、增量修改和组件复用；远程 REST 图用 openflowkit。
-version: 1.1.0
+version: 1.2.0
 ---
 
 # 运筹蛊本地画图（命令桥）
@@ -119,11 +119,17 @@ version: 1.1.0
     - 重构时发现多余的视图画布：先把其中独有的数据（如第三方费用明细）迁回对应原子画布并绑定、读回核对，再按规则 13 经用户确认后 `delete_flow`。
 
 27. **改画布内容前必须先升版本并写备注（用户 2026-11-16 定规，全盘适用）**：任何对已有画布的写操作（`apply` 改节点/连线/引用/跨画布线），动手前先给该流程**升一个新版本**，并把本次修改内容写进版本备注，让每次改动都有可回退、可追溯的版本。
-    - 命令桥没有升版 op，升版是编辑器 UI 动作：打开目标画布 → 右上角「版本管理」触发器（GitBranch 图标，显示 `vN`）→ 面板里点「升版」。升版会深拷贝当前画布与建模数据到新版本（新 `doc-<uuid>`），旧版本原样保留，`activeVersionId` 指向新版本。
-    - 升版后用 `targets.mjs` 读回，找到新 `document_id`（名称与旧版本相同、`node_count` 相同的那个新 docId），**所有写操作只在新版本文档上做**，用它的 `page_id` 和 `read` 到的 `version` 作 `--base-version`。
-    - 版本备注：在版本面板里点新版本行的铅笔（重命名），填「vN 日期 本次改了什么」（一句话，含关键决策）。备注存在版本注册表的 `name` 字段，首页与工具栏都会显示。
+    - **走接口，不要点屏幕**（用户 2026-11-16 定规：能用接口就用接口，屏幕操作是最后手段）。命令桥已支持版本 op，一条命令完成升版 + 备注：
+      ```bash
+      node $S/version.mjs --doc <document_id> --upgrade --note "vN 2026-11-16 本次改了什么"
+      ```
+      输出里 `upgraded.document_id` / `upgraded.page_id` 就是新版本，`upgraded.version_id` 是新版本的注册表 ID；只要备注不要升版用 `--rename-only`。
+      底层是 `tool` 命令的两个 op：`upgrade_flow_version {documentId}` 与 `rename_flow_version {documentId, versionId, name}`（同样可用 `tool.mjs --request` 单独发）。
+    - 升版会深拷贝当前画布与建模数据到新版本（新 `doc-<uuid>`），旧版本原样保留，`activeVersionId` 指向新版本；**所有后续写操作只在新版本文档上做**，用它的 `page_id` 和 `read` 到的 `version` 作 `--base-version`。
+    - 版本备注存在版本注册表的 `name` 字段，首页卡片与工具栏都会显示；格式「vN 日期 本次改了什么」，一句话含关键决策。
     - 只有新建画布（`--create`）不需要先升版；新建即 v1。
     - 改完必须复验：`read` 数元素、聚合图跑 `check-aggregation.mjs`，确认 issues 为空再交付。
+    - 版本 op 属于 `tool` 事务，不走画布撤销；不要用它替代 `apply`，也不要为了升版去点版本面板。
 
 ## 流程
 
@@ -135,14 +141,17 @@ node $S/read.mjs --doc <document_id> --page <page_id> # 3 读取现状与 versio
 node $S/check-aggregation.mjs --doc <id> --page <id>  # 聚合图写完后的排版自检（重叠、压框、文字溢出、超 50、重复引用 id）
 node $S/apply.mjs --doc <id> --page <id> --base-version <version> --ops ops.json [--key <幂等键>]
 node $S/apply.mjs --create "采购流程" --ops ops.json [--key <幂等键>]   # 新建画布
+node $S/version.mjs --doc <document_id> --upgrade --note "vN 日期 本次改了什么"  # 改已有画布前：升版 + 写备注（接口，不点屏幕）
 node $S/tool.mjs --request action.json [--doc <id> --page <id>] [--base-version <version>] [--key <幂等键>]
 ```
+
+`version.mjs` 升版后返回新的 `document_id`/`page_id`/`version_id`，后续 `read` 与 `apply` 都用新文档；不要再用旧 docId 写入。
 
 `apply` 成功返回 `{version, node_count, edge_count, created_ids}`。新建画布用 `--create <名称>`，`ops` 作用于新画布；`create_target` 可省略，若写则必须是第一项且名称与 `--create` 一致。
 
 **菱形、圆、椭圆、六边形永远按正方形渲染**，连接点却在节点外框上；外框不是正方形，线就会悬在图形外面。桥写入这几类图形时会按较短边（最小 140）规整成正方形并保持中心，但仍应直接给正方形尺寸，判断节点用 200×200、字号 16，并给上下节点留足纵向间距（行距 ≥ 260）。
 
-**其他 `tool` 命令**：`{"op":"rename_flow","documentId":"<文档ID>","name":"<新名称>"}`（同名会拒绝）；`delete_flow` 把整个流程移入回收站，`remove_folder` 删除空文件夹，用法见规则 13。
+**其他 `tool` 命令**：`{"op":"rename_flow","documentId":"<文档ID>","name":"<新名称>"}`（同名会拒绝）；`{"op":"upgrade_flow_version","documentId":"<文档ID>"}` 升版并返回新 `document_id`/`page_id`/`version_id`；`{"op":"rename_flow_version","documentId":"<文档ID>","versionId":"<版本ID>","name":"<备注>"}` 写版本备注；`delete_flow` 把整个流程移入回收站，`remove_folder` 删除空文件夹，用法见规则 13。
 
 **登记与归档（`tool` 命令 `organize`）**：`{"op":"organize","documentId":"<文档ID>","group":["工作","九洲","系统交互图","00 聚合图"]}`。把画布登记成可被引用的流程，并放进首页分组（路径上缺的文件夹自动创建）。不需要 `--doc/--page`。**默认不执行**（见规则 14，新画布留在「未分组」）；只有用户指定了文件夹，或这张画布要被引用时才做，否则它在首页的“引用画布”面板里选不到。
 
