@@ -97,7 +97,7 @@ if (-not $SkipSync) {
         }
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $PayloadRoot 'tools') | Out-Null
-    foreach ($tool in @('check-plugins.mjs', 'prune-stale-dsh-cookies.mjs', 'patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js', 'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js', 'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js', 'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-cc-parity.js')) {
+    foreach ($tool in @('check-plugins.mjs', 'prune-stale-dsh-cookies.mjs', 'patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js', 'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js', 'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js', 'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-cc-parity.js', 'bili-nudge-fix.mjs')) {
         $src = Join-Path $SourceRoot $tool
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $PayloadRoot "tools\$tool") -Force }
     }

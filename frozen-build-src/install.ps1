@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 <#
   DeepSeek Harness 冻结版 · 一键安装脚本
   ------------------------------------------------------------------
@@ -178,6 +178,36 @@ try {
         if (Test-Path -LiteralPath $stale) { & cmd.exe /c rmdir /s /q "$stale" | Out-Null }
     }
 
+    # billion-context 用户配置（长程压缩 A+B）：只在目标不存在时落盘，升级不覆盖用户已调过的配置。
+    $biliTemplate = Join-Path $homeTemplate 'billion-context.json'
+    $biliDir = Join-Path $env:USERPROFILE '.config\billion-context'
+    $biliTarget = Join-Path $biliDir 'billion-context.json'
+    if ((Test-Path -LiteralPath $biliTemplate) -and -not (Test-Path -LiteralPath $biliTarget)) {
+        New-Item -ItemType Directory -Force -Path $biliDir | Out-Null
+        Copy-Item -LiteralPath $biliTemplate -Destination $biliTarget -Force
+        Write-Log "billion-context 长程压缩配置已写入 $biliTarget"
+    }
+
+    # 旧配置把 emergencyThresholdPercent 写成数字（如 92）时，内核 parsePercent 原样当 9200% 用：
+    # 逐请求刷 Config validation warnings，且紧急截断永不触发。就地归一化成 "92%"。
+    if (Test-Path -LiteralPath $biliTarget) {
+        try {
+            $biliCfg = Get-Content -LiteralPath $biliTarget -Raw -Encoding UTF8 | ConvertFrom-Json
+            $etp = $biliCfg.compress.emergencyThresholdPercent
+            if ($null -ne $etp -and "$etp" -match '^\d+(\.\d+)?$') {
+                $num = [double]$etp
+                if ($num -le 1) { $num = $num * 100 }
+                $fixed = ('{0}%' -f [int][math]::Round($num))
+                $biliCfg.compress.emergencyThresholdPercent = $fixed
+                Copy-Item -LiteralPath $biliTarget -Destination "$biliTarget.bak-$stamp" -Force
+                [IO.File]::WriteAllText($biliTarget, ($biliCfg | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding($false)))
+                Write-Log "billion-context emergencyThresholdPercent 已归一化：$etp → $fixed"
+            }
+        } catch {
+            Write-Log ("billion-context 配置归一化跳过：" + $_.Exception.Message) 'WARN'
+        }
+    }
+
     # ---------- 4.1 规范化 pnpm 元数据（随包 node_modules 写死了打包机路径，不修会让以后的 pnpm add 直接失败） ----------
     $nmDir = Join-Path $profileDir 'node_modules'
     $modulesYaml = Join-Path $nmDir '.modules.yaml'
@@ -290,6 +320,19 @@ try {
                 Write-Log '先用 Repair-Plugins.ps1 复查，或重跑下一版安装包补齐依赖。' 'WARN'
             }
             [IO.File]::WriteAllText((Join-Path $InstallDir 'plugins-preflight.json'), ($report | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
+        }
+    }
+
+    # ---------- 5.2 billion-context 长程压缩补丁（幂等：nudge 死锁 / gate 误拒 / 配置告警刷屏） ----------
+    $biliFix = Join-Path (Join-Path $InstallDir 'tools') 'bili-nudge-fix.mjs'
+    if ((Test-Path -LiteralPath $biliFix) -and (Test-Path -LiteralPath $node)) {
+        $biliOut = & $node $biliFix --profile $profileDir 2>&1 | Out-String
+        $biliMiss = @($biliOut -split "`r?`n" | Where-Object { $_ -match '^MISS' })
+        if ($biliMiss.Count -gt 0) {
+            Write-Log ("billion-context 补丁锚点缺失（升级 billion-context 后需更新 tools\bili-nudge-fix.mjs）：" + ($biliMiss -join ' | ')) 'WARN'
+        } else {
+            $biliSummary = ($biliOut -split "`r?`n" | Where-Object { $_ -match '^summary' })
+            Write-Log ("billion-context 压缩补丁：{0}" -f ($biliSummary -join ' ')) 'OK'
         }
     }
 
