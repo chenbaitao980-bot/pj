@@ -141,6 +141,14 @@ try {
         Log '已把 dsh-mobile 加入 dsh.profile.bundles' 'OK'
     }
 
+    # 2.5) 应用本地兼容补丁：saved 网卡断开时自动跟随默认路由网卡，避免刷 warning 拖崩 host（幂等）
+    $lanPatch = Join-Path $PSScriptRoot 'patch-mobile-lan-autofollow.js'
+    $mobileEntry = Join-Path $profileDir 'node_modules\dsh-mobile\lib\index.mjs'
+    if ((Test-Path -LiteralPath $lanPatch) -and (Test-Path -LiteralPath $mobileEntry)) {
+        $patchOut = & $node $lanPatch $mobileEntry 2>&1 | Out-String
+        Log ("网卡自动跟随补丁：$($patchOut.Trim())") 'OK'
+    }
+
     $checker = Join-Path $InstallDir 'tools\check-plugins.mjs'
     if (Test-Path -LiteralPath $checker) {
         $raw = & $node $checker $profileDir --json 2>&1 | Out-String
