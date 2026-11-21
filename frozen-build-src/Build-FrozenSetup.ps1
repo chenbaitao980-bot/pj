@@ -97,11 +97,11 @@ if (-not $SkipSync) {
         }
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $PayloadRoot 'tools') | Out-Null
-    foreach ($tool in @('check-plugins.mjs', 'prune-stale-dsh-cookies.mjs', 'patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js', 'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js', 'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js', 'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-cc-parity.js', 'bili-nudge-fix.mjs')) {
+    foreach ($tool in @('check-plugins.mjs', 'prune-stale-dsh-cookies.mjs', 'patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js', 'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js', 'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js', 'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-agent-loop-hooks.js', 'patch-billion-context-preview.js', 'patch-cc-parity.js', 'patch-catalog-free-models.js', 'patch-pi-ai-model-defaults.js', 'patch-pi-ai-model-fields.js', 'patch-pi-ai-free-route-fallback.js', 'bili-nudge-fix.mjs')) {
         $src = Join-Path $SourceRoot $tool
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $PayloadRoot "tools\$tool") -Force }
     }
-    foreach ($script in @('install.ps1', 'Uninstall.ps1', 'Doctor.ps1', 'Repair-Plugins.ps1', 'Launch.ps1', 'Finalize-Update.ps1', 'Upgrade.ps1', 'Plugin-Scope.ps1', 'Build-FrozenSetup.ps1', 'ship-plugin.js', 'ship-plugin-vendor.js')) {
+    foreach ($script in @('install.ps1', 'Uninstall.ps1', 'Doctor.ps1', 'Repair-Plugins.ps1', 'Launch.ps1', 'Finalize-Update.ps1', 'Upgrade.ps1', 'Plugin-Scope.ps1', 'Build-FrozenSetup.ps1', 'ship-plugin.js', 'ship-plugin-vendor.js', 'sync-live-plugins.js')) {
         $src = Join-Path $SourceRoot $script
         if (Test-Path -LiteralPath $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $PayloadRoot $script) -Force }
     }
@@ -130,7 +130,7 @@ if (-not $SkipPurge) {
 # 界面补丁不在 purge 步骤里：换上游 payload 时必须重新落一遍，否则打包出来的
 # 待办面板仍是折叠态、/ 菜单缺少「插件」标题。脚本自身幂等（已应用则跳过）。
 Step '应用界面补丁（待办面板 / 插件菜单标题）'
-foreach ($patch in @('patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js', 'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js', 'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js', 'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-cc-parity.js')) {
+foreach ($patch in @('patch-no-workspace.js', 'patch-multi-workspace-ui.js', 'patch-sidebar-add-tab.js', 'patch-workspace-roots-chip.js', 'patch-todo-panel.js', 'patch-slash-plugin-group.js', 'patch-task-board.js', 'patch-side-chat-tree.js', 'patch-workspace-notes.js', 'patch-session-tracker.js', 'patch-desktop-attention.js', 'patch-session-log-repair.js', 'patch-agent-loop-hooks.js', 'patch-billion-context-preview.js', 'patch-cc-parity.js', 'patch-catalog-free-models.js', 'patch-pi-ai-model-defaults.js', 'patch-pi-ai-model-fields.js', 'patch-pi-ai-free-route-fallback.js')) {
     $patchPath = Join-Path $SourceRoot $patch
     if (-not (Test-Path -LiteralPath $patchPath)) { throw "缺少补丁脚本：$patchPath" }
     & $node $patchPath $PayloadRoot
